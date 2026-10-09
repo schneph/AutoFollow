@@ -528,7 +528,7 @@ def open_web_ui_external(app: OpenFollowApp) -> None:
     url = webkit_browser.build_url(app._config, web_server=getattr(app, "_web_server", None))
     try:
         if sys.platform == "win32":
-            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606 - Windows-only API
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606  # nosec B606 – loopback web UI URL, Windows-only API
         else:
             subprocess.run(["open", url], check=True)
     except (OSError, subprocess.SubprocessError):
