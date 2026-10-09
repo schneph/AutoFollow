@@ -61,6 +61,7 @@ jobs:
             git
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-python-gobject
             mingw-w64-ucrt-x86_64-python-cairo
             mingw-w64-ucrt-x86_64-gtk3
@@ -87,7 +88,8 @@ jobs:
           name: models
           path: packaging/windows/_build/models
 
-      - name: Install AutoFollow and its pure-Python dependencies
+      # gcc builds the few sdist-only dependencies (netifaces for multicast-expert).
+      - name: Install AutoFollow and its Python dependencies
         run: |
           python --version
           pip install --break-system-packages --ignore-requires-python --no-deps .
