@@ -408,6 +408,8 @@
  /* Segmented two-option toggle (Tracking Mode): equal-width cells. */
  .seg-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-width: 30rem; padding: 4px; border: 1px solid var(--border-soft); border-radius: 0.7rem; background: rgba(0, 0, 0, 0.22); }
  .seg-toggle--3 { grid-template-columns: repeat(3, 1fr); max-width: 36rem; }
+ .seg-toggle--4 { grid-template-columns: repeat(4, 1fr); max-width: 48rem; }
+ @media (max-width: 640px) { .seg-toggle--4 { grid-template-columns: 1fr 1fr; } }
  /* An option is a <label>: it reads in normal case, not the form label's caps. */
  .seg-toggle .seg-option { margin: 0; display: flex; cursor: pointer; text-transform: none; letter-spacing: normal; }
  .seg-toggle .seg-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -4941,9 +4943,9 @@
  const display = (sel.value === 'midi') ? '' : 'none';
  rows.forEach((row) => { row.style.display = display; });
  });
- // Detection: the Tracking mode radio (off / assist / replace) reveals the
- // mode-specific sub-blocks. ``data-assist-only`` shows for AI Assisted,
- // ``data-replace-only`` for Fully Automatic. The server renders the correct
+ // Detection: the Tracking mode radio (off / assist / replace / multi) reveals
+ // the mode-specific sub-blocks. ``data-assist-only`` shows for AI Assisted,
+ // ``data-replace-only`` for Fully Automatic, ``data-multi-only`` for All Performers. The server renders the correct
  // ``hidden`` state on first paint; this handles subsequent operator toggles.
  // Scoped to the closest form so a future toggle can't collateral-toggle it.
  document.addEventListener('change', (event) => {
@@ -4958,6 +4960,9 @@
  });
  form.querySelectorAll('[data-replace-only]').forEach((el) => {
  if (mode === 'replace') { el.removeAttribute('hidden'); } else { el.setAttribute('hidden', ''); }
+ });
+ form.querySelectorAll('[data-multi-only]').forEach((el) => {
+ if (mode === 'multi') { el.removeAttribute('hidden'); } else { el.setAttribute('hidden', ''); }
  });
  });
  // Marker Visuals: the style radio reveals that style's groups. Each group

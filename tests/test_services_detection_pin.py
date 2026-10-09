@@ -1594,3 +1594,272 @@ def test_release_restores_full_validity_on_the_wire(monkeypatch) -> None:
     _run(app, None)
 
     assert marker.to_psn_marker().status == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Multi mode (All Performers) – every tracked person gets a controlled marker of
+# their own, with no operator. Linear unproject: a box at centre fraction c sits
+# at world x = c × 10.
+# ---------------------------------------------------------------------------
+
+
+class _MultiDetector:
+    def __init__(
+        self, detections: list[_StubDetection], *, available: bool = True, confidence_threshold: float = 0.2
+    ) -> None:
+        self.detections = list(detections)
+        self.tracked_detection = None
+        self.available = available
+        self.confidence_threshold = confidence_threshold
+        self.coast_s = 0.5
+
+
+def _multi_app(ids: tuple[int, ...] = (1, 2, 3), **cfg) -> SimpleNamespace:  # noqa: ANN003
+    markers = {mid: _StubMarker(mid) for mid in ids}
+    base = {"enabled": True, "pin_mode": "multi", "smoothing": 1.0, "prediction": 0.0, "reacquire_radius_m": 1.5}
+    base.update(cfg)
+    return _make_app(
+        detection_cfg=DetectionConfig(**base),  # type: ignore[arg-type]
+        server=_MultiMarkerServer(markers),  # type: ignore[arg-type]
+        selected_id=ids[0] if ids else None,
+        controlled_ids=list(ids),
+        resolution=(1000, 1000),
+    )
+
+
+def _run_multi(app, detections, monkeypatch, **kw) -> _MultiDetector:  # noqa: ANN001, ANN003
+    detector = _MultiDetector(detections, **kw)
+    _run(app, detector, monkeypatch, unproject=_linear_unproject)
+    return detector
+
+
+def _x(app: SimpleNamespace, mid: int) -> float:
+    return float(app._server.get_marker(mid).pos[0])
+
+
+def _track(app: SimpleNamespace, mid: int) -> int | None:
+    return app._detection_pin_states[mid].locked_track_id
+
+
+def test_multi_gives_each_person_their_own_marker(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10, y1=0.0), _det(0.7, 20)], monkeypatch)
+
+    assert {_track(app, 1), _track(app, 2)} == {10, 20}
+    by_track = {_track(app, mid): mid for mid in (1, 2)}
+    assert _x(app, by_track[10]) == pytest.approx(2.0)
+    assert _x(app, by_track[20]) == pytest.approx(7.0)
+    # The spare marker drives nobody and says so on the wire.
+    assert _track(app, 3) is None
+    assert app._server.get_marker(3).status == 0.0
+    assert app._server.get_marker(by_track[10]).status == pytest.approx(detection_status(0.9, 0.2, grace_s=0.5))
+
+
+def test_multi_newcomers_take_lowest_free_ids_most_confident_first(monkeypatch) -> None:
+    app = _multi_app()
+    weak = _StubDetection(0.15, 0.0, 0.25, 0.1, track_id=10, confidence=0.4)
+    strong = _StubDetection(0.65, 0.0, 0.75, 0.1, track_id=20, confidence=0.95)
+    _run_multi(app, [weak, strong], monkeypatch)
+
+    assert _track(app, 1) == 20
+    assert _track(app, 2) == 10
+
+
+def test_multi_keeps_a_person_on_their_marker_across_frames(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    # A more confident newcomer never steals an assigned marker.
+    newcomer = _StubDetection(0.75, 0.0, 0.85, 0.1, track_id=30, confidence=0.99)
+    _run_multi(app, [_det(0.3, 10), newcomer], monkeypatch)
+
+    assert _track(app, 1) == 10
+    assert _x(app, 1) == pytest.approx(3.0)
+    assert _track(app, 2) == 30
+
+
+def test_multi_marker_holds_position_invalid_when_its_person_is_gone(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.4, 10)], monkeypatch)
+    _run_multi(app, [], monkeypatch)
+
+    marker = app._server.get_marker(1)
+    assert _track(app, 1) is None
+    assert marker.pos[0] == pytest.approx(4.0)
+    assert marker.status == 0.0
+    assert app._detection_pin_states[1].attached_track_id is None
+
+
+def test_multi_newcomer_near_a_lost_marker_resumes_it(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.8, 20)], monkeypatch)
+    lost_mid = next(mid for mid in (1, 2) if _track(app, mid) == 20)
+    # Person 20 is lost; a re-numbered track 21 appears 0.5 m from where they left.
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    _run_multi(app, [_det(0.2, 10), _det(0.85, 21)], monkeypatch)
+
+    assert _track(app, lost_mid) == 21
+    assert _track(app, 3) is None
+
+
+def test_multi_newcomer_far_from_lost_markers_takes_lowest_free_id(monkeypatch) -> None:
+    app = _multi_app(ids=(1, 2))
+    _run_multi(app, [_det(0.9, 10)], monkeypatch)
+    _run_multi(app, [], monkeypatch)
+    # Marker 1 was lost at x=9; a newcomer at x=1 is outside the radius.
+    _run_multi(app, [_det(0.1, 11)], monkeypatch)
+
+    assert _track(app, 1) == 11
+    assert _x(app, 1) == pytest.approx(1.0)
+
+
+def test_multi_zero_radius_never_reacquires_by_position(monkeypatch) -> None:
+    app = _multi_app(ids=(1, 2, 3), reacquire_radius_m=0.0)
+    _run_multi(app, [_det(0.2, 10), _det(0.8, 20)], monkeypatch)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    _run_multi(app, [_det(0.2, 10), _det(0.85, 21)], monkeypatch)
+
+    # The lost marker is free again, so the newcomer takes the lowest free id.
+    assert _track(app, 2) == 21
+
+
+def test_multi_extra_people_wait_for_a_free_marker(monkeypatch) -> None:
+    app = _multi_app(ids=(1,))
+    _run_multi(app, [_det(0.2, 10), _det(0.6, 20)], monkeypatch)
+    assert _track(app, 1) == 10
+    _run_multi(app, [_det(0.6, 20)], monkeypatch)
+    # Freed on the frame its person leaves, then taken by the waiting person.
+    assert _track(app, 1) == 20
+    assert _x(app, 1) == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        _StubDetection(0.15, 0.0, 0.25, 0.1, track_id=10, age_s=0.2),
+        _StubDetection(0.15, 0.0, 0.25, 0.1, track_id=10, confidence=0.1),
+        _StubDetection(0.15, 0.0, 0.25, 0.1, track_id=-1),
+    ],
+    ids=["coasting", "below-threshold", "untracked"],
+)
+def test_multi_only_confident_fresh_tracks_claim_a_marker(monkeypatch, box: _StubDetection) -> None:
+    app = _multi_app()
+    _run_multi(app, [box], monkeypatch)
+    assert all(_track(app, mid) is None for mid in (1, 2, 3))
+
+
+def test_multi_assigned_track_coasting_keeps_its_marker_with_fading_status(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    coasting = _StubDetection(0.25, 0.0, 0.35, 0.1, track_id=10, age_s=0.25)
+    _run_multi(app, [coasting], monkeypatch)
+
+    assert _track(app, 1) == 10
+    assert app._server.get_marker(1).status == pytest.approx(detection_status(0.9, 0.2, age_s=0.25, grace_s=0.5))
+
+
+@pytest.mark.parametrize(
+    ("detector_kw", "resolution"),
+    [({"available": False}, (1000, 1000)), ({}, (0, 0))],
+    ids=["no-backend", "no-feed"],
+)
+def test_multi_without_tracking_frees_every_marker(monkeypatch, detector_kw, resolution) -> None:  # noqa: ANN001
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    app._video_receiver.resolution = resolution
+    _run_multi(app, [_det(0.2, 10)], monkeypatch, **detector_kw)
+
+    for mid in (1, 2, 3):
+        assert _track(app, mid) is None
+        assert app._server.get_marker(mid).status == 0.0
+
+
+def test_multi_with_no_detector_frees_every_marker() -> None:
+    app = _multi_app(ids=(1, 2))
+    _run(app, None)
+    assert [app._server.get_marker(mid).status for mid in (1, 2)] == [0.0, 0.0]
+
+
+def test_multi_marker_leaving_controlled_set_gets_full_validity_back(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [], monkeypatch)
+    app._controlled_ids = [1, 2]
+    _run_multi(app, [], monkeypatch)
+
+    assert set(app._detection_pin_states) == {1, 2}
+    assert app._server.get_marker(3).status == 1.0
+
+
+def test_multi_overlay_paints_each_box_in_its_markers_colour(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+
+    attached = {
+        s.attached_track_id: s.attached_marker_id
+        for s in app._detection_pin_states.values()
+        if s.attached_track_id is not None
+    }
+    assert attached == {10: _track_owner(app, 10), 20: _track_owner(app, 20)}
+
+
+def _track_owner(app: SimpleNamespace, track_id: int) -> int:
+    return next(mid for mid, s in app._detection_pin_states.items() if s.locked_track_id == track_id)
+
+
+def test_switching_out_of_multi_releases_its_markers(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [], monkeypatch)
+    app._config.detection.pin_mode = "assist"
+    _run_multi(app, [], monkeypatch)
+
+    assert [app._server.get_marker(mid).status for mid in (1, 2, 3)] == [1.0, 1.0, 1.0]
+
+
+def test_multi_drops_assist_ghosts(monkeypatch) -> None:
+    app = _multi_app()
+    app._assist_manual[1] = object()
+    _run_multi(app, [], monkeypatch)
+    assert app._assist_manual == {}
+
+
+def test_multi_is_a_noop_with_no_controlled_markers(monkeypatch) -> None:
+    app = _multi_app(ids=())
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert app._detection_pin_states == {}
+
+
+def _nan_unproject(_params, screen_pt, w, h, _plane_z):  # noqa: ANN001, ANN202
+    return np.array([[np.nan, np.nan, 0.0]], dtype=np.float64)
+
+
+def test_multi_unprojectable_person_drives_nothing(monkeypatch) -> None:
+    app = _multi_app()
+    _run(app, _MultiDetector([_det(0.2, 10)]), monkeypatch, unproject=_nan_unproject)
+
+    # Claimed (the track is real) but placed nowhere, so the marker vouches for nothing.
+    assert _track(app, 1) == 10
+    assert app._server.get_marker(1).pos == (0.0, 0.0, 0.0)
+    assert app._server.get_marker(1).status == 0.0
+
+
+def test_multi_unprojectable_newcomer_skips_reacquire(monkeypatch) -> None:
+    app = _multi_app(ids=(1, 2))
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    _run_multi(app, [], monkeypatch)
+    _run(app, _MultiDetector([_det(0.2, 11)]), monkeypatch, unproject=_nan_unproject)
+
+    assert _track(app, 1) == 11
+
+
+def test_multi_top_pin_point_unprojects_on_each_markers_height(monkeypatch) -> None:
+    app = _multi_app(ids=(1,), pin_point="top")
+    app._server.get_marker(1).set_pos(0.0, 0.0, 1.7)
+    planes: list[float] = []
+
+    def _record(params, screen_pt, w, h, plane_z):  # noqa: ANN001, ANN202
+        planes.append(plane_z)
+        return _linear_unproject(params, screen_pt, w, h, plane_z)
+
+    _run(app, _MultiDetector([_det(0.2, 10)]), monkeypatch, unproject=_record)
+
+    assert planes == [pytest.approx(1.7)]
+    assert app._server.get_marker(1).pos[2] == pytest.approx(1.7)

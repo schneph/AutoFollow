@@ -564,8 +564,9 @@ _DETECTION_PIN_POINTS = ("top", "bottom")
 # with the tracked (largest-box) detection – the original auto-pin. ``assist``
 # is the two-marker hybrid: the operator steers a manual anchor freely while the
 # AI-corrected output marker glides toward the *nearest* detection within
-# ``assist_radius_m`` (or back to the anchor when none is in range).
-_DETECTION_PIN_MODES = ("replace", "assist")
+# ``assist_radius_m`` (or back to the anchor when none is in range). ``multi``
+# gives every person in view their own controlled marker, no operator needed.
+_DETECTION_PIN_MODES = ("replace", "assist", "multi")
 
 
 @dataclass
@@ -632,6 +633,9 @@ class DetectionConfig:
     pin_mode: str = "assist"
     assist_radius_m: float = 1.0
     assist_strength: float = 0.5
+    # Multi mode: a person entering within this distance of a marker whose
+    # performer was lost resumes that marker instead of taking the lowest free one.
+    reacquire_radius_m: float = 1.5
     # Master on/off for region-of-interest masking. When False (default) the
     # masks below are inactive and detection runs over the whole frame even if
     # masks are drawn; True confines detection to the union of enabled masks.
@@ -667,6 +671,7 @@ class DetectionConfig:
         # Gate radius for assist mode. Upper bound mirrors web/validation.py.
         self.assist_radius_m = _coerce_float(self.assist_radius_m, 1.0, lo=0.1, hi=50.0)
         self.assist_strength = _coerce_float(self.assist_strength, 0.5, lo=0.0, hi=1.0)
+        self.reacquire_radius_m = _coerce_float(self.reacquire_radius_m, 1.5, lo=0.0, hi=50.0)
         self.masks_enabled = _coerce_bool(self.masks_enabled, False)
         # Convert dict entries (hand-edited TOML / imported config) to
         # dataclasses and drop non-object entries, so the detector thread can

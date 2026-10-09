@@ -56,11 +56,11 @@ def test_section_order_tracking_then_models_then_detection_display() -> None:
     assert pos_tracking < pos_models < pos_display
 
 
-def test_tracking_is_a_three_state_segmented_radio() -> None:
+def test_tracking_is_a_four_state_segmented_radio() -> None:
     html = _render()
-    # One radiogroup with three radios, values off / assist / replace.
-    assert html.count('name="tracking_state"') == 3
-    for value in ("off", "assist", "replace"):
+    # One radiogroup with four radios, values off / assist / replace / multi.
+    assert html.count('name="tracking_state"') == 4
+    for value in ("off", "assist", "replace", "multi"):
         assert f'name="tracking_state" value="{value}"' in html
     assert "seg-toggle" in html
     # No standalone enabled checkbox or pin_marker checkbox survives.
@@ -85,6 +85,27 @@ def test_tracking_state_reflects_config_mode() -> None:
     replace_cfg.detection.pin_mode = "replace"
     replace_html = _render(config=replace_cfg)
     assert 'name="tracking_state" value="replace" checked' in replace_html
+
+    multi_cfg = AppConfig()
+    multi_cfg.detection.enabled = True
+    multi_cfg.detection.pin_mode = "multi"
+    multi_html = _render(config=multi_cfg)
+    assert 'name="tracking_state" value="multi" checked' in multi_html
+
+
+def test_reacquire_radius_shows_only_in_multi_mode() -> None:
+    multi_cfg = AppConfig()
+    multi_cfg.detection.enabled = True
+    multi_cfg.detection.pin_mode = "multi"
+    multi_cfg.detection.reacquire_radius_m = 2.5
+    multi_html = _render(config=multi_cfg)
+    assert 'name="reacquire_radius_m" value="2.5"' in multi_html
+    assert re.search(r"data-multi-only\s*>", multi_html)
+
+    assist_cfg = AppConfig()
+    assist_cfg.detection.enabled = True
+    assist_cfg.detection.pin_mode = "assist"
+    assert re.search(r"data-multi-only\s+hidden", _render(config=assist_cfg))
 
 
 def test_no_removed_fields_rendered() -> None:

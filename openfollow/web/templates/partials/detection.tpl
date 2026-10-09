@@ -52,7 +52,7 @@
 % end
 
 % det = config.detection
-% tracking_state = 'off' if not det.enabled else ('assist' if det.pin_mode == 'assist' else 'replace')
+% tracking_state = det.pin_mode if det.enabled else 'off'
 
     <form class="section {{'saved' if saved_section == 'tracking' else ''}}" data-fold-key="detection_tracking" data-help="detection"
           hx-post="/section/detection/tracking" hx-target="#detection-section" hx-swap="outerHTML" hx-trigger="submit">
@@ -62,7 +62,7 @@
         <div class="row">
             <div class="field">
                 <label>Tracking</label>
-                <div class="seg-toggle seg-toggle--3" role="radiogroup" aria-label="Tracking mode">
+                <div class="seg-toggle seg-toggle--4" role="radiogroup" aria-label="Tracking mode">
                     <label class="seg-option">
                         <input type="radio" name="tracking_state" value="off" {{'checked' if tracking_state == 'off' else ''}}>
                         <span><strong>Off</strong><small>No detection</small></span>
@@ -74,6 +74,10 @@
                     <label class="seg-option">
                         <input type="radio" name="tracking_state" value="replace" {{'checked' if tracking_state == 'replace' else ''}}>
                         <span><strong>Fully Automatic</strong><small>Auto-follows one person</small></span>
+                    </label>
+                    <label class="seg-option">
+                        <input type="radio" name="tracking_state" value="multi" {{'checked' if tracking_state == 'multi' else ''}}>
+                        <span><strong>All Performers</strong><small>A marker per person</small></span>
                     </label>
                 </div>
             </div>
@@ -156,6 +160,20 @@
                            hx-target="#detection-assist-strength-error" hx-swap="innerHTML" hx-include="closest form"
                            aria-describedby="detection-assist-strength-error" aria-invalid="false">
                     <span id="detection-assist-strength-error" class="field-error"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="group group--assist" data-multi-only {{'' if tracking_state == 'multi' else 'hidden'}}>
+            <h3 class="group-title">All Performers</h3>
+            <div class="row row--pair">
+                <div class="field">
+                    <label>Re-acquire radius (m)</label>
+                    <input id="detection-reacquire-radius-m" type="number" name="reacquire_radius_m" value="{{det.reacquire_radius_m}}" min="0" max="50" step="0.1"
+                           hx-get="/api/validate/detection/reacquire_radius_m" hx-trigger="blur changed delay:200ms"
+                           hx-target="#detection-reacquire-radius-m-error" hx-swap="innerHTML" hx-include="closest form"
+                           aria-describedby="detection-reacquire-radius-m-error" aria-invalid="false">
+                    <span id="detection-reacquire-radius-m-error" class="field-error"></span>
                 </div>
             </div>
         </div>

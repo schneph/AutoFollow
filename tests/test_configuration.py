@@ -3199,6 +3199,23 @@ def test_detection_config_accepts_replace_pin_mode() -> None:
     assert DetectionConfig(pin_mode="replace").pin_mode == "replace"
 
 
+def test_detection_config_accepts_multi_pin_mode() -> None:
+    assert DetectionConfig(pin_mode="multi").pin_mode == "multi"
+
+
+def test_detection_config_reacquire_radius_default() -> None:
+    assert DetectionConfig().reacquire_radius_m == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    "bad_radius,expected",
+    [(0.0, 0.0), (-3.0, 0.0), (100.0, 50.0), ("wide", 1.5), (None, 1.5), (float("nan"), 1.5)],
+)
+def test_detection_config_clamps_reacquire_radius(bad_radius: object, expected: float) -> None:
+    cfg = DetectionConfig(reacquire_radius_m=bad_radius)  # type: ignore[arg-type]
+    assert cfg.reacquire_radius_m == pytest.approx(expected)
+
+
 def test_detection_config_assist_strength_default() -> None:
     """Default clip strength 0.5 blends the AI-corrected output halfway
     between the manual anchor and the detected person, leaving operator

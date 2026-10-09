@@ -46,6 +46,9 @@ class DetectionPinState:
     # Replace mode: the PSN tracker status last written to the driven marker, so
     # /api/stats can show the pin's own view beside the wire. None once released.
     status: float | None = None
+    # Multi mode: the marker's person was lost, so a newcomer near where they
+    # left resumes this marker. Cleared when the marker is driven again.
+    lost: bool = False
 
     def reset(self) -> None:
         """Clear smoothing/velocity so the next acquisition re-seeds fresh.
@@ -64,6 +67,7 @@ class DetectionPinState:
         self.ai_smooth_y = None
         self.attached_track_id = None
         self.attached_marker_id = None
+        self.lost = False
 
     def soft_release(self) -> None:
         """Drop the person lock + velocity but keep the outer glide.
@@ -298,6 +302,17 @@ def apply_detection_pin(
         # manual ghosts, so each output keeps gliding to its anchor (degrading to
         # pure manual) rather than freezing.
         _apply_assist_all(
+            app,
+            person_detector=person_detector,
+            unproject_cam_buffer=unproject_cam_buffer,
+            screen_point_buffer=screen_point_buffer,
+            dt=dt,
+        )
+        return
+
+    if det.pin_mode == "multi":
+        _prune_manual_markers(app, keep=set())
+        _apply_multi_all(
             app,
             person_detector=person_detector,
             unproject_cam_buffer=unproject_cam_buffer,
@@ -544,6 +559,118 @@ def _assist_one(
     # in the default detection colour.
     state.attached_track_id = state.locked_track_id
     state.attached_marker_id = marker_id
+
+
+def _apply_multi_all(
+    app: Any,
+    *,
+    person_detector: Any,
+    unproject_cam_buffer: npt.NDArray[Any],
+    screen_point_buffer: npt.NDArray[Any],
+    dt: float = NOMINAL_FRAME_DT,
+) -> None:
+    """Give every tracked person their own controlled marker, hands-off.
+
+    A marker keeps its person for as long as the detector hands out that track
+    (it coasts through brief occlusions). A confident new track takes the free
+    marker that lost its person nearest to it within ``reacquire_radius_m``,
+    else the lowest free id; with no free marker it waits. A marker whose track
+    ends holds its position at status 0.0 and is free again.
+    """
+    cfg = app._config
+    pool = sorted(mid for mid in app._controlled_ids if app._server.get_marker(mid) is not None)
+    _prune_pin_states(app, keep=set(pool))
+    if not pool:
+        return
+
+    w, h = app._video_receiver.resolution
+    if person_detector is None or not person_detector.available or w <= 0 or h <= 0:
+        # Nobody can be tracked: every marker is free and vouches for nothing.
+        for mid in pool:
+            state = _get_pin_state(app, mid)
+            state.reset()
+            _write_status(app._server.get_marker(mid), state, 0.0)
+        return
+
+    use_bottom = cfg.detection.pin_point == "bottom"
+    params = _load_camera_params(app, unproject_cam_buffer)
+    screen_pt = screen_point_buffer
+    boxes = {box.track_id: box for box in person_detector.detections if box.track_id >= 0}
+    world_cache: dict[tuple[int, float], tuple[float, float] | None] = {}
+
+    def _world(track_id: int, plane_z: float) -> tuple[float, float] | None:
+        key = (track_id, plane_z)
+        if key not in world_cache:
+            box = boxes[track_id]
+            screen_pt[0, 0] = (box.x1 + box.x2) / 2.0 * w
+            screen_pt[0, 1] = (box.y2 if use_bottom else box.y1) * h
+            undistorted = invert_overlay_distortion(
+                screen_pt, float(w), float(h), cfg.camera.lens_k1, cfg.camera.lens_k2
+            )
+            world = unproject_to_plane(params, undistorted, float(w), float(h), plane_z)
+            world_cache[key] = (float(world[0, 0]), float(world[0, 1])) if np.all(np.isfinite(world[0])) else None
+        return world_cache[key]
+
+    def _plane_z(marker: Any) -> float:
+        return float(cfg.grid.z_offset) if use_bottom else float(marker.pos[2])
+
+    states = {mid: _get_pin_state(app, mid) for mid in pool}
+    for state in states.values():
+        if state.locked_track_id is not None and state.locked_track_id not in boxes:
+            state.reset()
+            state.lost = True
+
+    claimed = {s.locked_track_id for s in states.values() if s.locked_track_id is not None}
+    threshold = person_detector.confidence_threshold
+    newcomers = sorted(
+        (b for tid, b in boxes.items() if tid not in claimed and b.age_s <= 0.0 and b.confidence >= threshold),
+        key=lambda b: (-b.confidence, b.track_id),
+    )
+    reacquire_sq = cfg.detection.reacquire_radius_m**2
+    for box in newcomers:
+        free = [mid for mid in pool if states[mid].locked_track_id is None]
+        if not free:
+            break
+        chosen: int | None = None
+        best_dsq = reacquire_sq
+        for mid in free:
+            if not states[mid].lost:
+                continue
+            marker = app._server.get_marker(mid)
+            world = _world(box.track_id, _plane_z(marker))
+            if world is None:
+                continue
+            mx, my, _ = marker.pos
+            dsq = (world[0] - mx) ** 2 + (world[1] - my) ** 2
+            if dsq <= best_dsq:
+                best_dsq, chosen = dsq, mid
+        if chosen is None:
+            chosen = free[0]
+        state = states[chosen]
+        state.reset()
+        state.locked_track_id = box.track_id
+
+    steps = dt_steps(dt)
+    coast_s = person_detector.coast_s
+    for mid in pool:
+        state = states[mid]
+        marker = app._server.get_marker(mid)
+        state.attached_track_id = None
+        state.attached_marker_id = None
+        if state.locked_track_id is None:
+            _write_status(marker, state, 0.0)
+            continue
+        box = boxes[state.locked_track_id]
+        world = _world(box.track_id, _plane_z(marker))
+        if world is None:
+            _write_status(marker, state, 0.0)
+            continue
+        state.attached_track_id = box.track_id
+        state.attached_marker_id = mid
+        smooth_x, smooth_y = _advance_smoothing_steps(state, world[0], world[1], cfg, steps)
+        status = detection_status(box.confidence, threshold, age_s=box.age_s, grace_s=coast_s)
+        marker.set_pos(smooth_x, smooth_y, marker.pos[2], status=status)
+        state.status = status
 
 
 def _prune_manual_markers(app: Any, *, keep: set[int]) -> None:

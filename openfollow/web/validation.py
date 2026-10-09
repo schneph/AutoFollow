@@ -611,13 +611,16 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         ),
         "pin_mode": FieldRule(
             _as_str,
-            choices=("replace", "assist"),
-            human_error="Pin mode must be 'replace' or 'assist'.",
+            choices=("replace", "assist", "multi"),
+            human_error="Pin mode must be 'replace', 'assist' or 'multi'.",
         ),
         "assist_radius_m": FieldRule(
             _as_float, lo=0.1, hi=50.0, human_error="Assist radius must be between 0.1 and 50 m."
         ),
         "assist_strength": FieldRule(_as_float, lo=0.0, hi=1.0, human_error="Assist strength must be between 0 and 1."),
+        "reacquire_radius_m": FieldRule(
+            _as_float, lo=0.0, hi=50.0, human_error="Re-acquire radius must be between 0 and 50 m."
+        ),
     },
     "video_source": {
         # ``video_source_type`` is the only field common to every plugin.

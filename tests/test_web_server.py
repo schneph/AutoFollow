@@ -5604,6 +5604,25 @@ def test_update_detection_tracking_replace_enables_with_replace_mode(live_server
     assert saved.detection.pin_mode == "replace"
 
 
+def test_update_detection_tracking_multi_enables_with_multi_mode(live_server) -> None:
+    """``tracking_state=multi`` enables detection and selects multi mode."""
+    server, base = live_server
+    status, _ = _post_form(base, "/section/detection/tracking", {"tracking_state": "multi"})
+    assert status == 200
+    saved = load_config(server.config_path)
+    assert saved.detection.enabled is True
+    assert saved.detection.pin_mode == "multi"
+
+
+def test_update_detection_tracking_saves_reacquire_radius(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "multi", "reacquire_radius_m": "2.5"}
+    )
+    assert status == 200
+    assert load_config(server.config_path).detection.reacquire_radius_m == pytest.approx(2.5)
+
+
 def test_update_detection_tracking_off_disables_and_keeps_last_mode(live_server) -> None:
     """``tracking_state=off`` disables detection but leaves ``pin_mode`` intact
     so re-enabling restores the operator's last mode."""

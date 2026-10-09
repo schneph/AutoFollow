@@ -1184,3 +1184,13 @@ def test_bidi_isolates_and_c1_controls_are_refused_and_stripped(value: str) -> N
     more at home in a config field than a C0 one."""
     assert validate("network", "label", value) == "Remove control or text-direction characters."
     assert _default_sanitiser(value) == "Lighting"
+
+
+def test_validate_accepts_multi_pin_mode() -> None:
+    assert validate("detection", "pin_mode", "multi") is None
+    assert validate("detection", "pin_mode", "crowd") is not None
+
+
+@pytest.mark.parametrize(("raw", "ok"), [("0", True), ("1.5", True), ("50", True), ("-0.1", False), ("51", False)])
+def test_validate_reacquire_radius_range(raw: str, ok: bool) -> None:
+    assert (validate("detection", "reacquire_radius_m", raw) is None) is ok

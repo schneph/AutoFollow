@@ -2962,6 +2962,7 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "pin_mode": _as_str,
     "assist_radius_m": _as_float,
     "assist_strength": _as_float,
+    "reacquire_radius_m": _as_float,
 }
 
 
@@ -6839,7 +6840,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
     def update_detection_tracking() -> Any:
         """Save the Tracking box: the mode radio is detection's only on/off.
 
-        ``tracking_state`` (off / assist / replace) maps to ``enabled`` +
+        ``tracking_state`` (off / assist / replace / multi) maps to ``enabled`` +
         ``pin_mode``: choosing a tracking mode auto-enables detection. ``off``
         leaves ``pin_mode`` untouched so re-enabling restores the last mode.
         """
@@ -6848,6 +6849,8 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             extra: dict[str, Any] = {"enabled": True, "pin_mode": "assist"}
         elif state == "replace":
             extra = {"enabled": True, "pin_mode": "replace"}
+        elif state == "multi":
+            extra = {"enabled": True, "pin_mode": "multi"}
         else:
             extra = {"enabled": False}
         cfg = _save_section_from_form("detection", extra_fields=extra)
