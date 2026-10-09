@@ -149,6 +149,22 @@ def run_selfcheck() -> int:
     return code
 
 
+def _check_bundled_detection(models_dir: Path) -> str | None:
+    """Run one bundled model on a blank frame; return what failed, or ``None``."""
+    import numpy as np
+
+    from openfollow.video.detection import _OpenCvDnnBackend
+
+    models = sorted(models_dir.glob("*.onnx"))
+    if not models:
+        return f"no detection model bundled in {models_dir}"
+    try:
+        _OpenCvDnnBackend(str(models[0])).predict(np.zeros((480, 640, 3), dtype=np.uint8), 0.5, 1, 640)
+    except Exception as exc:  # noqa: BLE001 - reported as the self-check verdict
+        return f"detection model {models[0].name} does not run on OpenCV DNN: {exc}"
+    return None
+
+
 def _selfcheck() -> int:
     """Verify the bundled native stack resolves; print OK / FAIL, return 0 / 1."""
     try:
@@ -181,10 +197,15 @@ def _selfcheck() -> int:
 
         import importlib
 
-        # The Windows build ships detection but not the torch export toolchain.
-        bundled = ("onnxruntime", "cv2") if sys.platform == "win32" else ("onnxruntime", "cv2", "ultralytics")
+        # The Windows build runs detection on OpenCV DNN and ships no export toolchain.
+        bundled = ("cv2",) if sys.platform == "win32" else ("onnxruntime", "cv2", "ultralytics")
         for mod in bundled:
             importlib.import_module(mod)
+        if sys.platform == "win32":
+            problem = _check_bundled_detection(resource_root() / "models")
+            if problem:
+                print(f"FAIL: {problem}")
+                return 1
 
         # Bottle templates import these openfollow submodules at render time
         # (`% from openfollow.<mod> import ...`); a missing one is invisible until

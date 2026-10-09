@@ -299,3 +299,44 @@ def test_run_export_returns_one_on_failure(launcher, monkeypatch, tmp_path) -> N
 
     _install_fake_export(monkeypatch, _boom)
     assert launcher.run_export(["m.pt"]) == 1
+
+
+def test_check_bundled_detection_without_a_model(launcher, tmp_path) -> None:
+    assert "no detection model bundled" in launcher._check_bundled_detection(tmp_path)
+
+
+def _install_fake_dnn_backend(monkeypatch, predict) -> list[str]:
+    import openfollow.video.detection as detection_module
+
+    loaded: list[str] = []
+
+    class _Backend:
+        def __init__(self, path: str) -> None:
+            loaded.append(Path(path).name)
+
+        def predict(self, frame, confidence, max_persons, inference_size):  # noqa: ANN001, ANN201
+            return predict()
+
+    monkeypatch.setattr(detection_module, "_OpenCvDnnBackend", _Backend)
+    return loaded
+
+
+def test_check_bundled_detection_runs_the_first_model(launcher, monkeypatch, tmp_path) -> None:
+    (tmp_path / "yolo26s.onnx").write_bytes(b"s")
+    (tmp_path / "yolo26n.onnx").write_bytes(b"n")
+    loaded = _install_fake_dnn_backend(monkeypatch, lambda: [])
+
+    assert launcher._check_bundled_detection(tmp_path) is None
+    assert loaded == ["yolo26n.onnx"]
+
+
+def test_check_bundled_detection_reports_a_model_opencv_cannot_run(launcher, monkeypatch, tmp_path) -> None:
+    (tmp_path / "yolo26n.onnx").write_bytes(b"n")
+
+    def _fail() -> list[object]:
+        raise RuntimeError("unsupported layer TopK")
+
+    _install_fake_dnn_backend(monkeypatch, _fail)
+
+    problem = launcher._check_bundled_detection(tmp_path)
+    assert problem == "detection model yolo26n.onnx does not run on OpenCV DNN: unsupported layer TopK"

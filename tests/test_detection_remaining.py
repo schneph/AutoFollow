@@ -20,7 +20,7 @@ This file fills in:
 * ``_OnnxBackend`` – constructor + ``predict`` matrix (input-size probe
   from ONNX graph, empty predictions, score-filter reject,
   box-coords unprojection, ``max_persons`` cap, degenerate-box skip).
-* ``_OnnxBackend._prepare_predictions`` shape-matrix branches.
+* ``_prepare_predictions`` shape-matrix branches.
 * ``_nms`` early-exit on single remaining index (``order.size == 1``).
 * ``_run`` outer try/except guard (inner raise → ``logger.exception``).
 * ``_run_inner`` loop matrix: no sample → sample-timeout counter,
@@ -62,6 +62,7 @@ from openfollow.video.detection import (
     PersonDetector,
     _nms,
     _OnnxBackend,
+    _prepare_predictions,
     _TrackedPerson,
 )
 
@@ -139,7 +140,7 @@ class TestNmsSingleIndexExit:
 
 
 # --------------------------------------------------------------------------- #
-# _OnnxBackend._prepare_predictions – shape matrix
+# _prepare_predictions – shape matrix
 # --------------------------------------------------------------------------- #
 
 
@@ -147,7 +148,7 @@ class TestPrepareOnnxPredictions:
     def test_batched_3d_output_is_squeezed(self) -> None:
         raw = np.zeros((1, 6, 3), dtype=np.float32)
         raw[0, :, 0] = [0.5, 0.5, 1.0, 1.0, 0.9, 0.1]  # one box, class_0 high
-        pred = _OnnxBackend._prepare_predictions(raw)
+        pred = _prepare_predictions(raw)
         assert pred.ndim == 2
         # Transposed so rows = detections, cols = [cx, cy, w, h, class...]
         assert pred.shape[0] >= 1
@@ -157,14 +158,14 @@ class TestPrepareOnnxPredictions:
         IndexError in ``predict``.  Short-circuit at the guard.
         """
         raw = np.zeros((5,), dtype=np.float32)
-        assert _OnnxBackend._prepare_predictions(raw).size == 0
+        assert _prepare_predictions(raw).size == 0
 
     def test_transpose_when_first_dim_is_short(self) -> None:
         """Many YOLO exports emit ``[84, N]`` rather than ``[N, 84]`` –
         the helper's heuristic transposes so predict sees rows = detections.
         """
         raw = np.zeros((6, 100), dtype=np.float32)
-        out = _OnnxBackend._prepare_predictions(raw)
+        out = _prepare_predictions(raw)
         assert out.shape == (100, 6)
 
 

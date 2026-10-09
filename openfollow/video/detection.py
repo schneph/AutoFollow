@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 OpenFollow Project
-"""Optional YOLO person detection via ONNX Runtime.
+"""Optional YOLO person detection via ONNX Runtime or OpenCV DNN.
 
 ``PersonDetector`` runs inference in a background thread off a GStreamer
-appsink using an ONNX Runtime backend. Produces ``DetectionBox`` results with
+appsink using an ONNX Runtime backend, or OpenCV's DNN module where ONNX
+Runtime cannot be imported. Produces ``DetectionBox`` results with
 stable ``track_id``s from the ByteTrack tracker, and supports live config
 reload via a single staged-config slot drained by the worker.
 ``check_detection_dependencies`` reports missing pip packages so the UI can
@@ -98,15 +99,20 @@ def check_detection_dependencies(
 ) -> list[str]:
     """Return pip-install names of required deps that are missing.
 
-    Person detection needs ``opencv-python`` and ``onnxruntime``; this reports
-    whichever are absent. ``config`` is accepted but not required.
+    Person detection needs ``opencv-python`` plus an inference runtime:
+    ``onnxruntime``, or OpenCV's own DNN module when that is built in. This
+    reports whichever are absent. ``config`` is accepted but not required.
     """
     missing: list[str] = []
     if _CV2_IMPORT_ERROR is not None:
         missing.append("opencv-python")
-    if importlib.util.find_spec("onnxruntime") is None:
+    if importlib.util.find_spec("onnxruntime") is None and not _opencv_dnn_available():
         missing.append("onnxruntime")
     return missing
+
+
+def _opencv_dnn_available() -> bool:
+    return cv2 is not None and callable(getattr(getattr(cv2, "dnn", None), "readNetFromONNX", None))
 
 
 @dataclass
@@ -242,6 +248,108 @@ def _letterbox(
     return padded, scale, (pad_x, pad_y)
 
 
+def _input_tensor(frame: npt.NDArray[Any], size: int) -> tuple[npt.NDArray[Any], float, tuple[int, int]]:
+    """Letterbox ``frame`` to a square NCHW float tensor in ``[0, 1]``."""
+    letterboxed, scale, pad = _letterbox(frame, max(160, size))
+    tensor = letterboxed.astype(np.float32) / 255.0
+    tensor = np.transpose(tensor, (2, 0, 1))
+    return np.expand_dims(tensor, axis=0), scale, pad
+
+
+def _prepare_predictions(raw: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    pred = np.asarray(raw)
+    if pred.ndim == 3:
+        pred = pred[0]
+    if pred.ndim != 2:
+        return np.empty((0, 0), dtype=np.float32)
+
+    # YOLOv8 ONNX is often [84, N]; convert to [N, 84].
+    if (pred.shape[0] < pred.shape[1] and pred.shape[0] >= 6) or (pred.shape[1] < 6 and pred.shape[0] >= 6):
+        pred = pred.T
+
+    return pred.astype(np.float32, copy=False)
+
+
+def _decode_predictions(
+    raw: npt.NDArray[Any],
+    frame: npt.NDArray[Any],
+    scale: float,
+    pad: tuple[int, int],
+    confidence: float,
+    max_persons: int,
+) -> list[DetectionBox]:
+    """Turn one YOLO output tensor into person boxes normalised to ``frame``."""
+    pad_x, pad_y = pad
+    pred = _prepare_predictions(raw)
+    if pred.size == 0 or pred.shape[1] <= 4:
+        return []
+
+    if pred.shape[1] == 6:
+        # NMS-free end-to-end head (YOLO26 / YOLOv10): each row is
+        # ``[x1, y1, x2, y2, conf, class]`` already in input-pixel xyxy
+        # space, de-duplicated and ranked by score. Keep person (class 0)
+        # only. The head already ran NMS, so don't run it again here – that
+        # would suppress legitimately overlapping people it kept on purpose.
+        scores = pred[:, 4]
+        keep_mask = (scores >= float(confidence)) & (np.rint(pred[:, 5]) == 0)
+        if not np.any(keep_mask):
+            return []
+        boxes_xyxy = pred[keep_mask, :4].astype(np.float32, copy=True)
+        scores = scores[keep_mask]
+        keep_indices = list(range(len(scores)))
+    else:
+        # YOLOv8 / YOLO11 head: ``[cx, cy, w, h, <class scores>]``; class 0
+        # is "person". Convert cx,cy,w,h -> x1,y1,x2,y2 then run NMS.
+        scores = pred[:, 4]
+        keep_mask = scores >= float(confidence)
+        if not np.any(keep_mask):
+            return []
+        boxes = pred[keep_mask, :4]
+        scores = scores[keep_mask]
+        boxes_xyxy = np.empty_like(boxes, dtype=np.float32)
+        boxes_xyxy[:, 0] = boxes[:, 0] - boxes[:, 2] / 2.0
+        boxes_xyxy[:, 1] = boxes[:, 1] - boxes[:, 3] / 2.0
+        boxes_xyxy[:, 2] = boxes[:, 0] + boxes[:, 2] / 2.0
+        boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2.0
+        keep_indices = _nms(boxes_xyxy, scores, iou_threshold=0.45)
+        if not keep_indices:  # pragma: no cover - unreachable: _nms always keeps >=1 on non-empty input
+            return []
+
+    frame_h, frame_w = frame.shape[:2]
+    scale = max(scale, 1e-6)
+    safe_w = max(frame_w, 1)
+    safe_h = max(frame_h, 1)
+
+    detections: list[DetectionBox] = []
+    for idx in keep_indices:
+        x1, y1, x2, y2 = boxes_xyxy[idx]
+        x1 = (x1 - pad_x) / scale
+        y1 = (y1 - pad_y) / scale
+        x2 = (x2 - pad_x) / scale
+        y2 = (y2 - pad_y) / scale
+
+        x1 = float(np.clip(x1, 0.0, frame_w))
+        y1 = float(np.clip(y1, 0.0, frame_h))
+        x2 = float(np.clip(x2, 0.0, frame_w))
+        y2 = float(np.clip(y2, 0.0, frame_h))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        detections.append(
+            DetectionBox(
+                x1=x1 / safe_w,
+                y1=y1 / safe_h,
+                x2=x2 / safe_w,
+                y2=y2 / safe_h,
+                confidence=float(scores[idx]),
+            )
+        )
+        if len(detections) >= max_persons:
+            break
+
+    return detections
+
+
 class _OnnxBackend:
     """YOLO ONNX Runtime backend.
 
@@ -310,19 +418,36 @@ class _OnnxBackend:
     def _to_positive_int(value: object) -> int | None:
         return int(value) if isinstance(value, int) and value > 0 else None
 
-    @staticmethod
-    def _prepare_predictions(raw: npt.NDArray[Any]) -> npt.NDArray[Any]:
-        pred = np.asarray(raw)
-        if pred.ndim == 3:
-            pred = pred[0]
-        if pred.ndim != 2:
-            return np.empty((0, 0), dtype=np.float32)
+    def predict(
+        self,
+        frame: npt.NDArray[Any],
+        confidence: float,
+        max_persons: int,
+        inference_size: int,
+    ) -> list[DetectionBox]:
+        tensor, scale, pad = _input_tensor(frame, self._model_input_size or int(inference_size))
+        outputs = self._session.run([self._output_name], {self._input_name: tensor})
+        return _decode_predictions(outputs[0], frame, scale, pad, confidence, max_persons)
 
-        # YOLOv8 ONNX is often [84, N]; convert to [N, 84].
-        if (pred.shape[0] < pred.shape[1] and pred.shape[0] >= 6) or (pred.shape[1] < 6 and pred.shape[0] >= 6):
-            pred = pred.T
+    def close(self) -> None:
+        """Release the InferenceSession (and its native intra-op thread
+        pool) deterministically instead of waiting for GC."""
+        self._session = None
 
-        return pred.astype(np.float32, copy=False)
+
+class _OpenCvDnnBackend:
+    """YOLO backend on OpenCV's DNN module, for hosts with no usable onnxruntime.
+
+    Reads no input shape from the model, so the configured ``inference_size``
+    must match the export.
+    """
+
+    model_input_size: int | None = None
+
+    def __init__(self, model_path: str) -> None:
+        if not _opencv_dnn_available():
+            raise ImportError("OpenCV was built without the DNN module")
+        self._net: Any = cv2.dnn.readNetFromONNX(model_path)
 
     def predict(
         self,
@@ -331,88 +456,12 @@ class _OnnxBackend:
         max_persons: int,
         inference_size: int,
     ) -> list[DetectionBox]:
-        target_size = self._model_input_size or int(inference_size)
-        target_size = max(160, target_size)
-
-        letterboxed, scale, (pad_x, pad_y) = _letterbox(frame, target_size)
-        tensor = letterboxed.astype(np.float32) / 255.0
-        tensor = np.transpose(tensor, (2, 0, 1))
-        tensor = np.expand_dims(tensor, axis=0)
-
-        outputs = self._session.run([self._output_name], {self._input_name: tensor})
-        pred = self._prepare_predictions(outputs[0])
-        if pred.size == 0 or pred.shape[1] <= 4:
-            return []
-
-        if pred.shape[1] == 6:
-            # NMS-free end-to-end head (YOLO26 / YOLOv10): each row is
-            # ``[x1, y1, x2, y2, conf, class]`` already in input-pixel xyxy
-            # space, de-duplicated and ranked by score. Keep person (class 0)
-            # only. The head already ran NMS, so don't run it again here – that
-            # would suppress legitimately overlapping people it kept on purpose.
-            scores = pred[:, 4]
-            keep_mask = (scores >= float(confidence)) & (np.rint(pred[:, 5]) == 0)
-            if not np.any(keep_mask):
-                return []
-            boxes_xyxy = pred[keep_mask, :4].astype(np.float32, copy=True)
-            scores = scores[keep_mask]
-            keep_indices = list(range(len(scores)))
-        else:
-            # YOLOv8 / YOLO11 head: ``[cx, cy, w, h, <class scores>]``; class 0
-            # is "person". Convert cx,cy,w,h -> x1,y1,x2,y2 then run NMS.
-            scores = pred[:, 4]
-            keep_mask = scores >= float(confidence)
-            if not np.any(keep_mask):
-                return []
-            boxes = pred[keep_mask, :4]
-            scores = scores[keep_mask]
-            boxes_xyxy = np.empty_like(boxes, dtype=np.float32)
-            boxes_xyxy[:, 0] = boxes[:, 0] - boxes[:, 2] / 2.0
-            boxes_xyxy[:, 1] = boxes[:, 1] - boxes[:, 3] / 2.0
-            boxes_xyxy[:, 2] = boxes[:, 0] + boxes[:, 2] / 2.0
-            boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2.0
-            keep_indices = _nms(boxes_xyxy, scores, iou_threshold=0.45)
-            if not keep_indices:  # pragma: no cover - unreachable: _nms always keeps >=1 on non-empty input
-                return []
-
-        frame_h, frame_w = frame.shape[:2]
-        scale = max(scale, 1e-6)
-        safe_w = max(frame_w, 1)
-        safe_h = max(frame_h, 1)
-
-        detections: list[DetectionBox] = []
-        for idx in keep_indices:
-            x1, y1, x2, y2 = boxes_xyxy[idx]
-            x1 = (x1 - pad_x) / scale
-            y1 = (y1 - pad_y) / scale
-            x2 = (x2 - pad_x) / scale
-            y2 = (y2 - pad_y) / scale
-
-            x1 = float(np.clip(x1, 0.0, frame_w))
-            y1 = float(np.clip(y1, 0.0, frame_h))
-            x2 = float(np.clip(x2, 0.0, frame_w))
-            y2 = float(np.clip(y2, 0.0, frame_h))
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            detections.append(
-                DetectionBox(
-                    x1=x1 / safe_w,
-                    y1=y1 / safe_h,
-                    x2=x2 / safe_w,
-                    y2=y2 / safe_h,
-                    confidence=float(scores[idx]),
-                )
-            )
-            if len(detections) >= max_persons:
-                break
-
-        return detections
+        tensor, scale, pad = _input_tensor(frame, int(inference_size))
+        self._net.setInput(tensor)
+        return _decode_predictions(self._net.forward(), frame, scale, pad, confidence, max_persons)
 
     def close(self) -> None:
-        """Release the InferenceSession (and its native intra-op thread
-        pool) deterministically instead of waiting for GC."""
-        self._session = None
+        self._net = None
 
 
 def _close_backend(backend: _InferenceBackend | None) -> None:
@@ -519,15 +568,23 @@ class PersonDetector:
         # current path for the construction-time load.
         model_path = base_model_path if base_model_path is not None else self._model_path
 
+        backend: _InferenceBackend
         try:
-            backend: _InferenceBackend = _OnnxBackend(model_path)
+            backend, backend_name = _OnnxBackend(model_path), "onnx"
         except ImportError as exc:
-            logger.warning(
-                "onnxruntime not installed – person detection disabled. "
-                "Install with: pip install openfollow[detection] (%s)",
-                exc,
-            )
-            return
+            if not _opencv_dnn_available():
+                logger.warning(
+                    "onnxruntime not installed – person detection disabled. "
+                    "Install with: pip install openfollow[detection] (%s)",
+                    exc,
+                )
+                return
+            logger.info("onnxruntime unavailable (%s); running detection on OpenCV DNN", exc)
+            try:
+                backend, backend_name = _OpenCvDnnBackend(model_path), "opencv"
+            except Exception as dnn_exc:
+                logger.error("Failed to initialize OpenCV DNN detection backend with '%s': %s", model_path, dnn_exc)
+                return
         except Exception as exc:
             logger.error(
                 "Failed to initialize ONNX detection backend with '%s': %s",
@@ -539,7 +596,7 @@ class PersonDetector:
         with self._backend_lock:
             old_backend = self._backend
             self._backend = backend
-            self._backend_name = "onnx"
+            self._backend_name = backend_name
             self._model_path = model_path
         # Release the replaced backend off the lock. stop() only closes on
         # terminal shutdown, so without this a live model/storage_path change
@@ -557,7 +614,8 @@ class PersonDetector:
         if model_size is not None:
             self._inference_size = self._normalize_inference_size(int(model_size))
         logger.info(
-            "Detection backend loaded: onnx (model=%s, imgsz=%d)",
+            "Detection backend loaded: %s (model=%s, imgsz=%d)",
+            backend_name,
             self._model_path,
             self._inference_size,
         )

@@ -1097,7 +1097,7 @@ Calibration is **web-only** – there is no on-device calibration overlay or cal
 
 Optional YOLO-based person detection that can auto-pin a marker to a detected person.
 
-The inference backend is **ONNX Runtime** (`openfollow[detection]`).
+The inference backend is **ONNX Runtime** (`openfollow[detection]`). Where `onnxruntime` cannot be imported but OpenCV has its DNN module, `_load_backend` falls back to `_OpenCvDnnBackend` (backend name `opencv`), which shares the letterbox and decode helpers and reads no input shape from the model, so `inference_size` must match the export. The Windows build relies on it.
 
 Default tuning:
 - `model = "yolo26n.onnx"` (the Fastest quality tier; pre-shipped on every distribution)

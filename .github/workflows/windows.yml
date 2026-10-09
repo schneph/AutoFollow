@@ -74,7 +74,6 @@ jobs:
             mingw-w64-ucrt-x86_64-gst-libav
             mingw-w64-ucrt-x86_64-python-numpy
             mingw-w64-ucrt-x86_64-python-opencv
-            mingw-w64-ucrt-x86_64-python-onnxruntime
             mingw-w64-ucrt-x86_64-python-pygame
             mingw-w64-ucrt-x86_64-python-psutil
             mingw-w64-ucrt-x86_64-python-packaging
@@ -98,18 +97,6 @@ jobs:
             "tomli-w>=1.0" "bottle>=0.12" "multicast-expert>=1.4" "python-osc>=1.10.2" \
             "mido>=1.3" "mistune>=3.3.4"
 
-      - name: Check the native Python packages import
-        run: |
-          pacman -Ql mingw-w64-ucrt-x86_64-python-onnxruntime | grep -iE 'pybind|\.pyd$|\.dll$' || true
-          pacman -Q mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-python-onnxruntime || true
-          for pkg in $(curl -fsSL https://repo.msys2.org/mingw/ucrt64/ | grep -o 'mingw-w64-ucrt-x86_64-python-onnxruntime-[^"]*\.pkg\.tar\.zst' | sort -u); do
-            n=$(curl -fsSL "https://repo.msys2.org/mingw/ucrt64/$pkg" | zstd -dc | tar -t | grep -c 'onnxruntime_pybind11_state' || true)
-            echo "probe: $pkg pybind=$n"
-          done
-          python -c "import sys; print(sys.version); import importlib.machinery as m; print(m.EXTENSION_SUFFIXES)"
-          python -c "import cv2, numpy; print('cv2', cv2.__version__)"
-          python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
-
       - name: Freeze
         run: pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/windows/autofollow.spec
 
@@ -117,7 +104,6 @@ jobs:
         run: |
           OPENFOLLOW_SELFCHECK=1 OPENFOLLOW_SELFCHECK_OUT="$PWD/selfcheck.txt" ./dist/AutoFollow/AutoFollow.exe; rc=$?
           cat selfcheck.txt || true
-          [ $rc -eq 0 ] || find dist/AutoFollow -ipath '*onnxruntime*' | head -50
           exit $rc
 
       - name: Build installer

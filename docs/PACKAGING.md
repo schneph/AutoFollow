@@ -639,11 +639,14 @@ artifact.
 1. An Ubuntu job exports the Fastest / Fast / Balanced YOLO26 models with
    `scripts/export_onnx.py`; torch never ships in the installer.
 2. The Windows job installs GTK 3, GStreamer (with `gtksink`, `mfvideosrc` and
-   libav), PyGObject, NumPy, OpenCV and ONNX Runtime from MSYS2, then the pure-Python
+   libav), PyGObject, NumPy and OpenCV from MSYS2, then the pure-Python
    dependencies with pip. MSYS2 has no pygame-ce or python-rtmidi build: the classic
-   pygame stands in for gamepads, and MIDI input is unavailable on Windows.
+   pygame stands in for gamepads, and MIDI input is unavailable on Windows. MSYS2's
+   onnxruntime package installs no Python extension, so detection runs on OpenCV's
+   DNN module instead (same models, same results).
 3. PyInstaller freezes `dist\AutoFollow`, the frozen app runs its self-check
-   (`OPENFOLLOW_SELFCHECK=1`, verdict written to `OPENFOLLOW_SELFCHECK_OUT`), and
+   (`OPENFOLLOW_SELFCHECK=1`, verdict written to `OPENFOLLOW_SELFCHECK_OUT`, which
+   includes running a bundled model on OpenCV DNN), and
    `makensis` wraps it into `AutoFollow-<version>-Setup.exe`.
 
 The installer is not code-signed, so SmartScreen shows "Windows protected your PC"

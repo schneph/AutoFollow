@@ -196,10 +196,115 @@ def test_load_backend_import_error_leaves_backend_none_and_warns(monkeypatch, ca
     detector._model_path = "/tmp/missing.onnx"
 
     _install_fake_onnx_backend(monkeypatch, detection_module, [], [ImportError("no onnxruntime")])
+    monkeypatch.setattr(detection_module, "_opencv_dnn_available", lambda: False)
     with caplog.at_level(_logging.WARNING, logger="openfollow.video.detection"):
         detector._load_backend()
     assert detector._backend is None
     assert any("onnxruntime not installed" in rec.message for rec in caplog.records)
+
+
+class _FakeNet:
+    """Stands in for a ``cv2.dnn.Net``: records its input, returns a fixed output."""
+
+    def __init__(self, output: np.ndarray) -> None:
+        self.output = output
+        self.inputs: list[np.ndarray] = []
+
+    def setInput(self, tensor: np.ndarray) -> None:  # noqa: N802 - OpenCV's method name
+        self.inputs.append(tensor)
+
+    def forward(self) -> np.ndarray:
+        return self.output
+
+
+def _install_fake_opencv_dnn(monkeypatch, detection_module, reader) -> None:  # noqa: ANN001
+    import types as _types
+
+    monkeypatch.setattr(
+        detection_module,
+        "cv2",
+        _types.SimpleNamespace(
+            dnn=_types.SimpleNamespace(readNetFromONNX=reader),
+            resize=lambda img, size, interpolation=None: np.zeros((size[1], size[0], 3), dtype=img.dtype),
+            INTER_LINEAR=1,
+        ),
+    )
+
+
+def test_load_backend_falls_back_to_opencv_dnn_without_onnxruntime(monkeypatch, caplog) -> None:
+    """With onnxruntime unimportable but OpenCV's DNN present, detection runs
+    on OpenCV and reports that backend."""
+    import logging as _logging
+
+    detection_module = _load_detection_module()
+    detector = detection_module.PersonDetector(DetectionConfig(enabled=False))
+    detector._model_path = "/tmp/w.onnx"
+    read: list[str] = []
+    net = _FakeNet(np.zeros((1, 300, 6), dtype=np.float32))
+    _install_fake_onnx_backend(monkeypatch, detection_module, [], [ImportError("no pybind")])
+    _install_fake_opencv_dnn(monkeypatch, detection_module, lambda path: read.append(path) or net)
+
+    with caplog.at_level(_logging.INFO, logger="openfollow.video.detection"):
+        detector._load_backend()
+
+    assert read == ["/tmp/w.onnx"]
+    assert isinstance(detector._backend, detection_module._OpenCvDnnBackend)
+    assert detector.performance_stats["backend"] == "opencv"
+    assert any("running detection on OpenCV DNN" in rec.message for rec in caplog.records)
+
+
+def test_load_backend_opencv_dnn_failure_leaves_backend_none(monkeypatch, caplog) -> None:
+    import logging as _logging
+
+    detection_module = _load_detection_module()
+    detector = detection_module.PersonDetector(DetectionConfig(enabled=False))
+    detector._model_path = "/tmp/corrupt.onnx"
+
+    def _reader(path):  # noqa: ANN001, ANN202
+        raise RuntimeError("unsupported layer")
+
+    _install_fake_onnx_backend(monkeypatch, detection_module, [], [ImportError("no pybind")])
+    _install_fake_opencv_dnn(monkeypatch, detection_module, _reader)
+
+    with caplog.at_level(_logging.ERROR, logger="openfollow.video.detection"):
+        detector._load_backend()
+
+    assert detector._backend is None
+    assert any("Failed to initialize OpenCV DNN detection backend" in rec.message for rec in caplog.records)
+
+
+def test_opencv_dnn_backend_refuses_without_dnn(monkeypatch) -> None:
+    detection_module = _load_detection_module()
+    monkeypatch.setattr(detection_module, "_opencv_dnn_available", lambda: False)
+    with pytest.raises(ImportError, match="DNN"):
+        detection_module._OpenCvDnnBackend("/tmp/w.onnx")
+
+
+def test_opencv_dnn_backend_decodes_end_to_end_head(monkeypatch) -> None:
+    """A YOLO26-style ``[x1, y1, x2, y2, conf, class]`` output becomes person
+    boxes in frame-normalised coordinates, other classes and weak scores dropped."""
+    detection_module = _load_detection_module()
+    output = np.array(
+        [
+            [
+                [160.0, 160.0, 480.0, 480.0, 0.9, 0.0],
+                [0.0, 0.0, 100.0, 100.0, 0.95, 2.0],
+                [10.0, 10.0, 50.0, 50.0, 0.1, 0.0],
+            ]
+        ],
+        dtype=np.float32,
+    )
+    net = _FakeNet(output)
+    _install_fake_opencv_dnn(monkeypatch, detection_module, lambda path: net)
+
+    backend = detection_module._OpenCvDnnBackend("/tmp/w.onnx")
+    boxes = backend.predict(np.zeros((640, 640, 3), dtype=np.uint8), 0.5, 5, 640)
+
+    assert backend.model_input_size is None
+    assert net.inputs[0].shape == (1, 3, 640, 640)
+    assert [(b.x1, b.y1, b.x2, b.y2, b.confidence) for b in boxes] == [pytest.approx((0.25, 0.25, 0.75, 0.75, 0.9))]
+    backend.close()
+    assert backend._net is None
 
 
 def test_load_backend_session_failure_leaves_backend_none_and_logs(monkeypatch, caplog) -> None:
