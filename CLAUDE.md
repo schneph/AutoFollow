@@ -219,7 +219,7 @@ All config lives in `config.toml` (auto-reloaded when file changes on disk).
 ### AppConfig top-level fields
 | Field | Default | Notes |
 |---|---|---|
-| `video_source_type` | `"testpattern"` | `"testpattern"` (Media Gallery, the default), `"ndi"`, `"srt"`, `"rtsp"`, `"rtp"`, `"picam"`, `"v4l2"` (Linux USB camera), `"avf"` (macOS USB camera), or any registered plugin ID |
+| `video_source_type` | `"testpattern"` | `"testpattern"` (Media Gallery, the default), `"ndi"`, `"srt"`, `"rtsp"`, `"rtp"`, `"picam"`, `"v4l2"` (Linux USB camera), `"avf"` (macOS USB camera), `"mf"` (Windows USB camera), or any registered plugin ID |
 | `ndi_source_name` | `""` | NDI source string (read by NDI plugin) |
 | `srt_host` | `"srt://0.0.0.0:5000"` | SRT URL (read by SRT plugin) |
 | `srt_passphrase` | `""` | SRT encryption key; drives `srtsrc.passphrase` and outranks a `?passphrase=` in the URL |
@@ -303,6 +303,7 @@ video/inputs/
     picam.py        # Raspberry Pi camera plugin (libcamerasrc, CSI/MIPI); caps pin format=I420
     v4l2.py         # USB camera / capture card plugin (v4l2src, UVC, Linux-only)
     avf.py          # USB camera / capture card plugin (avfvideosrc, macOS-only)
+    mf.py           # USB camera / capture card plugin (mfvideosrc + decodebin for MJPEG, Windows-only)
     testpattern.py  # Media Gallery source (id stays "testpattern"): plays a stored image / VP8 clip
                     #   or the Stage / Grey defaults from media_store.py – always available
 ```

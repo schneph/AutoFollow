@@ -2312,6 +2312,10 @@ class AppConfig:
     avf_width: int = 1920
     avf_height: int = 1080
     avf_framerate: int = 30
+    mf_device_path: str = ""
+    mf_width: int = 1280
+    mf_height: int = 720
+    mf_framerate: int = 30
     # Media Gallery selection; see ``_DEFAULT_SELECTED_MEDIA`` above.
     testpattern_selected_media: str = _DEFAULT_SELECTED_MEDIA
 
