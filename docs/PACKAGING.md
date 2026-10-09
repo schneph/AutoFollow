@@ -187,10 +187,12 @@ sudo systemctl start openfollow
 
 ## Release flow
 
-AutoFollow releases carry the macOS and Windows installers: pushing a `v*` tag
-runs `.github/workflows/macos.yml` and `.github/workflows/windows.yml`, and each
-attaches its installer to that tag's release through
-`scripts/publish-release-asset.sh`, creating the release if it is the first.
+AutoFollow releases carry the macOS and Windows installers. Pushing a
+`release/**` branch runs `.github/workflows/release.yml`: it drafts
+`v<pyproject version>` with `.github/release-notes.md`, runs
+`.github/workflows/macos.yml` and `.github/workflows/windows.yml`, which attach
+their installers through `scripts/publish-release-asset.sh`, and publishes the
+release once both are on it. Pushing a `v*` tag attaches the installers too.
 
 `.github/workflows/release-deb.yml` runs only by `workflow_dispatch` and builds one leg per architecture on GitHub-hosted
 `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64) runners (each in a
