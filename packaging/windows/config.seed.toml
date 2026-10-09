@@ -1,0 +1,17 @@
+# AutoFollow first-run defaults for the Windows build.
+# Copied to %APPDATA%\AutoFollow\config.toml on first launch (never overwritten
+# afterwards). Only the fields that differ from the dataclass defaults are set.
+
+# Matches the macOS build, so the web page is at http://localhost:8080 on both.
+web_port = 8080
+
+# Start on the built-in picture so the screen shows something straight away; the
+# operator then picks the webcam ("USB Camera (Windows)") in the web page.
+video_source_type = "testpattern"
+
+[detection]
+# onnxruntime + opencv are bundled and the Fast / Balanced tiers are seeded below.
+enabled = true
+model = "yolo26s.onnx"
+# @STORAGE_PATH@ is replaced with %APPDATA%\AutoFollow\yolo by the launcher.
+storage_path = "@STORAGE_PATH@"

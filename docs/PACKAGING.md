@@ -617,3 +617,37 @@ install either: the bundle's GStreamer scan is confined to its own `gst_plugins/
 so a system `ndisrc` is never picked up.) NDI input remains available on the
 Raspberry Pi build; receiving NDI on macOS would need a separate, NDI-licensed
 build, which is out of scope for the developer DMG.
+
+## Windows installer
+
+The Windows build is made by `.github/workflows/windows.yml` on every push to
+`main`, every `windows/**` branch and every pull request; a `v*` tag also attaches
+the installer to that release. Download it from the run's **AutoFollow-Windows-Setup**
+artifact.
+
+### Files (Windows)
+
+| File | Role |
+| --- | --- |
+| `packaging/windows/autofollow.spec` | PyInstaller spec, frozen from MSYS2 UCRT64 Python |
+| `packaging/windows/config.seed.toml` | First-run defaults copied to `%APPDATA%\AutoFollow\config.toml` |
+| `packaging/windows/installer.nsi` | NSIS installer: Program Files, Start menu + desktop shortcuts, uninstaller |
+| `packaging/macos/launcher.py`, `runtime_hook.py` | Shared with the macOS bundle; both branch on `sys.platform` |
+
+### How it is built
+
+1. An Ubuntu job exports the Fastest / Fast / Balanced YOLO26 models with
+   `scripts/export_onnx.py`; torch never ships in the installer.
+2. The Windows job installs GTK 3, GStreamer (with `gtksink`, `mfvideosrc` and
+   libav), PyGObject, NumPy, OpenCV and ONNX Runtime from MSYS2, then the pure-Python
+   dependencies with pip. MSYS2 has no pygame-ce or python-rtmidi build: the classic
+   pygame stands in for gamepads, and MIDI input is unavailable on Windows.
+3. PyInstaller freezes `dist\AutoFollow`, the frozen app runs its self-check
+   (`OPENFOLLOW_SELFCHECK=1`, verdict written to `OPENFOLLOW_SELFCHECK_OUT`), and
+   `makensis` wraps it into `AutoFollow-<version>-Setup.exe`.
+
+The installer is not code-signed, so SmartScreen shows "Windows protected your PC"
+on first run: choose **More info → Run anyway**. Settings in `%APPDATA%\AutoFollow`
+survive an uninstall and reinstall. The webcam input is **USB Camera (Windows)**
+(`video/inputs/mf.py`), and **Open Web UI** opens the default browser at
+`http://localhost:8080`.

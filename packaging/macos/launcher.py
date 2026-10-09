@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 OpenFollow Project
-"""Entry point baked into the macOS .app bundle.
+"""Entry point baked into the macOS .app bundle and the Windows build.
 
 A single frozen binary serves three roles, dispatched on argv / env so the GUI,
 the in-app model export, and the build-time self-check all run from one bundle:
@@ -26,13 +26,17 @@ import shutil
 import sys
 from pathlib import Path
 
-APP_NAME = "OpenFollow"
+APP_NAME = "AutoFollow"
 SEED_CONFIG_NAME = "config.seed.toml"
 STORAGE_PLACEHOLDER = "@STORAGE_PATH@"
 
 
 def default_config_dir() -> Path:
     """Per-user, writable config home for the bundled app."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / APP_NAME
     return Path.home() / "Library" / "Application Support" / APP_NAME
 
 
@@ -128,6 +132,24 @@ def run_export(export_args: list[str]) -> int:
 
 
 def run_selfcheck() -> int:
+    """Run the self-check, print its verdict and copy it to ``OPENFOLLOW_SELFCHECK_OUT``.
+
+    A windowed Windows build has no console, so the file is how the build reads why it failed.
+    """
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = _selfcheck()
+    out_path = os.environ.get("OPENFOLLOW_SELFCHECK_OUT")
+    if out_path:
+        Path(out_path).write_text(buf.getvalue(), encoding="utf-8")
+    print(buf.getvalue(), end="")
+    return code
+
+
+def _selfcheck() -> int:
     """Verify the bundled native stack resolves; print OK / FAIL, return 0 / 1."""
     try:
         import gi
@@ -137,7 +159,8 @@ def run_selfcheck() -> int:
         from gi.repository import Gst
 
         Gst.init(None)
-        required = ("gtksink", "videoconvert", "videotestsrc", "avfvideosrc")
+        camera = "mfvideosrc" if sys.platform == "win32" else "avfvideosrc"
+        required = ("gtksink", "videoconvert", "videotestsrc", "decodebin", camera)
         missing = [name for name in required if Gst.ElementFactory.find(name) is None]
         if missing:
             print(f"FAIL: missing GStreamer elements: {', '.join(missing)}")
@@ -150,7 +173,7 @@ def run_selfcheck() -> int:
         from openfollow.video.inputs import get_registry
 
         registry = get_registry()
-        expected_inputs = {"testpattern", "ndi", "srt", "rtsp", "rtp", "picam", "v4l2", "avf"}
+        expected_inputs = {"testpattern", "ndi", "srt", "rtsp", "rtp", "picam", "v4l2", "avf", "mf"}
         missing_inputs = expected_inputs - registry.keys()
         if missing_inputs:
             print(f"FAIL: missing video input plugins: {', '.join(sorted(missing_inputs))}")
@@ -158,7 +181,9 @@ def run_selfcheck() -> int:
 
         import importlib
 
-        for mod in ("onnxruntime", "cv2", "ultralytics"):
+        # The Windows build ships detection but not the torch export toolchain.
+        bundled = ("onnxruntime", "cv2") if sys.platform == "win32" else ("onnxruntime", "cv2", "ultralytics")
+        for mod in bundled:
             importlib.import_module(mod)
 
         # Bottle templates import these openfollow submodules at render time

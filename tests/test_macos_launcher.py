@@ -122,8 +122,22 @@ def test_seed_user_data_without_bundled_models_still_seeds_config(launcher, tmp_
 
 
 def test_default_config_dir_under_home(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert launcher.default_config_dir() == tmp_path / "Library" / "Application Support" / "OpenFollow"
+    assert launcher.default_config_dir() == tmp_path / "Library" / "Application Support" / "AutoFollow"
+
+
+def test_default_config_dir_on_windows_uses_appdata(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert launcher.default_config_dir() == tmp_path / "Roaming" / "AutoFollow"
+
+
+def test_default_config_dir_on_windows_without_appdata(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert launcher.default_config_dir() == tmp_path / "AppData" / "Roaming" / "AutoFollow"
 
 
 def test_resource_root_prefers_meipass(launcher, monkeypatch, tmp_path) -> None:
@@ -155,6 +169,26 @@ def test_main_routes_selfcheck(launcher, monkeypatch) -> None:
     monkeypatch.setattr(launcher, "run_gui", lambda: pytest.fail("GUI must not run for selfcheck"))
 
     assert launcher.main([]) == 0
+
+
+def test_run_selfcheck_copies_verdict_to_file(launcher, monkeypatch, tmp_path, capsys) -> None:
+    out = tmp_path / "selfcheck.txt"
+    monkeypatch.setenv("OPENFOLLOW_SELFCHECK_OUT", str(out))
+    monkeypatch.setattr(launcher, "_selfcheck", lambda: print("FAIL: missing mfvideosrc") or 1)
+
+    assert launcher.run_selfcheck() == 1
+    assert out.read_text(encoding="utf-8") == "FAIL: missing mfvideosrc\n"
+    assert capsys.readouterr().out == "FAIL: missing mfvideosrc\n"
+
+
+def test_run_selfcheck_without_file_only_prints(launcher, monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.delenv("OPENFOLLOW_SELFCHECK_OUT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(launcher, "_selfcheck", lambda: print("OK") or 0)
+
+    assert launcher.run_selfcheck() == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_main_routes_gui_by_default(launcher, monkeypatch) -> None:
