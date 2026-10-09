@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 OpenFollow Project
+# macOS build: freezes the app with PyInstaller and wraps it in a .dmg (Apple Silicon).
+name: macOS
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "packaging/macos/**"
+      - ".github/workflows/macos.yml"
+      - "scripts/publish-release-asset.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # create-dmg is left out: its Finder styling step needs an interactive
+      # session, so build-dmg.sh packs the image with hdiutil instead.
+      - name: Install system dependencies
+        run: brew install pkg-config gobject-introspection cairo gtk+3 gstreamer librsvg hidapi
+
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install poetry
+          poetry config virtualenvs.in-project true
+          poetry env use "$(command -v python)"
+
+      - name: Build the .dmg
+        run: make dmg
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: AutoFollow-macOS
+          path: dist/*.dmg
+
+      - name: Publish to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-release-asset.sh "${GITHUB_REF_NAME}" dist/*.dmg

@@ -47,6 +47,7 @@ is Pi-only).
 | `packaging/debian/{postinst,prerm,postrm}` | Create the `openfollow` user + linger, enable/disable the units. |
 | `packaging/debian/preinst.in` + `render-preinst.sh` | On upgrade, back up the station's settings before the new files unpack (see [Settings backups](#settings-backups)). |
 | `.github/workflows/release-deb.yml` | Release CI: builds the `.deb`, signs it into an `.ofupdate` bundle, and attaches both to the release – natively per arch on GitHub-hosted `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64) runners (each inside a `debian:trixie` container). |
+| `.github/workflows/macos.yml` | Builds the Apple Silicon `.dmg` on `macos-latest` via `make dmg`; on a `v*` tag it attaches the `.dmg` to the release. |
 
 ## Install layout
 
@@ -186,8 +187,12 @@ sudo systemctl start openfollow
 
 ## Release flow
 
-`.github/workflows/release-deb.yml` triggers on a published GitHub Release (or
-`workflow_dispatch`) and builds one leg per architecture on GitHub-hosted
+AutoFollow releases carry the macOS and Windows installers: pushing a `v*` tag
+runs `.github/workflows/macos.yml` and `.github/workflows/windows.yml`, and each
+attaches its installer to that tag's release through
+`scripts/publish-release-asset.sh`, creating the release if it is the first.
+
+`.github/workflows/release-deb.yml` runs only by `workflow_dispatch` and builds one leg per architecture on GitHub-hosted
 `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64) runners (each in a
 `debian:trixie` container). Each leg wraps its `.deb` in a **signed update bundle**
 and attaches both the bundle and the raw `.deb` to the release, so a release
@@ -503,7 +508,7 @@ Everything lives under [`packaging/macos/`](../packaging/macos/):
 # One-time host tools (in addition to the documented macOS dev setup):
 brew install librsvg create-dmg
 
-make dmg            # -> dist/OpenFollow-<version>-<arch>.dmg
+make dmg            # -> dist/AutoFollow-<version>-<arch>.dmg
 ```
 
 `make dmg` is macOS-only, installs the optional `package-macos` Poetry group plus
@@ -588,7 +593,7 @@ The `.app` is **ad-hoc signed, not notarized**. macOS quarantines it on first
 download, so the operator must clear the quarantine flag once:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/OpenFollow.app"
+xattr -dr com.apple.quarantine "/Applications/AutoFollow.app"
 # or: right-click the app -> Open -> Open
 ```
 
