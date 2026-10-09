@@ -7,6 +7,7 @@ Invoked by ``.github/workflows/windows.yml``. Shares the launcher and runtime ho
 with the macOS bundle; the GTK / GStreamer / GObject stack comes from MSYS2.
 """
 
+import importlib.util
 import os
 from pathlib import Path
 
@@ -46,6 +47,19 @@ def _add(triple):
 
 for pkg in ("gi", "cairo", "onnxruntime"):
     _add(collect_all(pkg))
+
+# collect_all misses onnxruntime's pybind extension under MSYS2's ABI-tagged
+# suffix, so ship everything in capi/ verbatim beside the package.
+_ort = importlib.util.find_spec("onnxruntime")
+if _ort is None or not _ort.submodule_search_locations:
+    raise SystemExit("autofollow.spec: onnxruntime is not installed")
+_capi = Path(next(iter(_ort.submodule_search_locations))) / "capi"
+_ort_native = sorted(p for p in _capi.iterdir() if p.suffix.lower() in (".pyd", ".dll"))
+if not any("pybind11_state" in p.name for p in _ort_native):
+    raise SystemExit(f"autofollow.spec: no onnxruntime pybind extension in {_capi}")
+binaries += [(str(p), "onnxruntime/capi") for p in _ort_native]
+hiddenimports.append("onnxruntime.capi.onnxruntime_pybind11_state")
+print(f"[autofollow.spec] onnxruntime native files: {[p.name for p in _ort_native]}")
 
 try:
     datas += copy_metadata("openfollow")

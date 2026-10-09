@@ -105,6 +105,7 @@ jobs:
         run: |
           OPENFOLLOW_SELFCHECK=1 OPENFOLLOW_SELFCHECK_OUT="$PWD/selfcheck.txt" ./dist/AutoFollow/AutoFollow.exe; rc=$?
           cat selfcheck.txt || true
+          [ $rc -eq 0 ] || find dist/AutoFollow -ipath '*onnxruntime*' | head -50
           exit $rc
 
       - name: Build installer
