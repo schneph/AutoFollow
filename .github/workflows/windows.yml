@@ -101,7 +101,11 @@ jobs:
       - name: Check the native Python packages import
         run: |
           pacman -Ql mingw-w64-ucrt-x86_64-python-onnxruntime | grep -iE 'pybind|\.pyd$|\.dll$' || true
-          pacman -Q mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-python-onnxruntime mingw-w64-ucrt-x86_64-onnxruntime || true
+          pacman -Q mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-python-onnxruntime || true
+          for pkg in $(curl -fsSL https://repo.msys2.org/mingw/ucrt64/ | grep -o 'mingw-w64-ucrt-x86_64-python-onnxruntime-[^"]*\.pkg\.tar\.zst' | sort -u); do
+            n=$(curl -fsSL "https://repo.msys2.org/mingw/ucrt64/$pkg" | zstd -dc | tar -t | grep -c 'onnxruntime_pybind11_state' || true)
+            echo "probe: $pkg pybind=$n"
+          done
           python -c "import sys; print(sys.version); import importlib.machinery as m; print(m.EXTENSION_SUFFIXES)"
           python -c "import cv2, numpy; print('cv2', cv2.__version__)"
           python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
