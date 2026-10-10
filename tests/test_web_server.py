@@ -5623,6 +5623,78 @@ def test_update_detection_tracking_saves_reacquire_radius(live_server) -> None:
     assert load_config(server.config_path).detection.reacquire_radius_m == pytest.approx(2.5)
 
 
+def _spotlight_server(server: ConfigWebServer, *, followed: int = -1, tracking: tuple[int, ...] = ()) -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2, 3]
+    cfg.viewer_marker_ids = [1, 2, 3]
+    cfg.detection.enabled = True
+    cfg.detection.pin_mode = "multi"
+    cfg.detection.spotlight_marker_id = 3
+    cfg.detection.followed_marker_id = followed
+    save_config(cfg, server.config_path)
+    performers = [{"marker_id": mid, "tracking": mid in tracking} for mid in (1, 2)]
+    server._runtime_stats_provider = lambda: {"tracking": {"all_performers": {"performers": performers}}}
+
+
+def test_update_detection_tracking_saves_the_spotlight_marker(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(base, "/section/detection/tracking", {"tracking_state": "multi", "spotlight_marker_id": "2"})
+    assert status == 200
+    assert load_config(server.config_path).detection.spotlight_marker_id == 2
+
+
+def test_performers_panel_lists_each_performer_with_a_follow_button(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=2, tracking=(1,))
+    catalog = MarkerCatalog()
+    catalog.upsert(1, name="Lead", color="#0652dd")
+    server._marker_catalog_provider = lambda: catalog
+
+    status, body = _get(base, "/section/detection/performers")
+
+    assert status == 200
+    assert "Lead (1)" in body and "Marker 2" in body
+    # The spotlight marker is not a performer.
+    assert "Marker 3" not in body
+    assert "Tracking a person" in body and "No person - followed" in body
+    assert 'hx-post="/section/detection/follow/1"' in body
+    assert 'hx-post="/section/detection/follow/none"' in body
+    assert "--marker-color: #0652dd" in body
+
+
+def test_performers_panel_without_a_spotlight_offers_no_follow_buttons(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    cfg = load_config(server.config_path)
+    cfg.detection.spotlight_marker_id = -1
+    save_config(cfg, server.config_path)
+
+    _, body = _get(base, "/section/detection/performers")
+
+    assert "Choose a spotlight marker" in body
+    assert "Marker 3" in body
+    assert "/section/detection/follow/" not in body
+
+
+def test_performers_panel_with_no_controlled_markers_says_so(live_server) -> None:
+    _, base = live_server
+    _, body = _get(base, "/section/detection/performers")
+    assert "No performer markers" in body
+
+
+@pytest.mark.parametrize(("target", "expected"), [("2", 2), ("none", -1), ("9", 1)])
+def test_follow_points_the_spotlight_at_a_controlled_performer_only(live_server, target: str, expected: int) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=1)
+
+    status, body = _post_form(base, f"/section/detection/follow/{target}", {})
+
+    assert status == 200
+    assert load_config(server.config_path).detection.followed_marker_id == expected
+    if expected == 2:
+        assert 'hx-post="/section/detection/follow/1"' in body
+
+
 def test_update_detection_tracking_off_disables_and_keeps_last_mode(live_server) -> None:
     """``tracking_state=off`` disables detection but leaves ``pin_mode`` intact
     so re-enabling restores the operator's last mode."""

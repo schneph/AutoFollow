@@ -31,9 +31,11 @@ from openfollow.runtime.services_detection_pin import (
     _prune_pin_states,
     apply_detection_pin,
     assist_active,
+    cycle_followed_performer,
     detection_status,
     get_or_create_manual_marker,
     is_assist_controlled,
+    performer_snapshot,
 )
 
 pytestmark = pytest.mark.unit
@@ -1863,3 +1865,159 @@ def test_multi_top_pin_point_unprojects_on_each_markers_height(monkeypatch) -> N
 
     assert planes == [pytest.approx(1.7)]
     assert app._server.get_marker(1).pos[2] == pytest.approx(1.7)
+
+
+# ---------------------------------------------------------------------------
+# All Performers spotlight – one controlled marker mirrors the performer the
+# operator chose to follow. Glide ease 0.2 per nominal frame, lock at 5 cm.
+# ---------------------------------------------------------------------------
+
+
+def _spot_app(ids: tuple[int, ...] = (1, 2, 3), *, spot: int = 3, followed: int = -1, **cfg) -> SimpleNamespace:  # noqa: ANN003
+    return _multi_app(ids, spotlight_marker_id=spot, followed_marker_id=followed, **cfg)
+
+
+def test_spotlight_is_left_out_of_the_performer_pool(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.5, 20), _det(0.8, 30)], monkeypatch)
+
+    assert {_track(app, 1), _track(app, 2)} == {10, 20}
+    assert _track(app, 3) is None
+    assert app._server.get_marker(3).status == 0.0
+
+
+def test_spotlight_glides_onto_the_followed_performer_then_tracks_exactly(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(0.4)
+    assert app._server.get_marker(3).status == pytest.approx(app._server.get_marker(1).status)
+
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 3) == 2.0
+    _run_multi(app, [_det(0.3, 10)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(3.0)
+
+
+def test_switching_the_followed_performer_glides_instead_of_jumping(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    app._config.detection.followed_marker_id = _track_owner(app, 20)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+
+    assert _x(app, 3) == pytest.approx(2.0 + 0.2 * 5.0)
+
+
+def test_spotlight_holds_invalid_while_the_followed_performer_has_nobody(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    _run_multi(app, [], monkeypatch)
+
+    assert _x(app, 3) == 2.0
+    assert app._server.get_marker(3).status == 0.0
+    # The performer coming back is a re-acquire, so the spotlight glides again.
+    _run_multi(app, [_det(0.6, 11)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(2.0 + 0.2 * 4.0)
+
+
+@pytest.mark.parametrize("followed", [-1, 3, 9], ids=["none", "itself", "not-a-performer"])
+def test_spotlight_without_a_performer_to_follow_vouches_for_nothing(monkeypatch, followed: int) -> None:
+    app = _spot_app(followed=followed)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+
+    assert _x(app, 3) == 0.0
+    assert app._server.get_marker(3).status == 0.0
+
+
+def test_spotlight_with_no_detector_vouches_for_nothing() -> None:
+    app = _spot_app(followed=1)
+    _run(app, None)
+    assert app._server.get_marker(3).status == 0.0
+
+
+@pytest.mark.parametrize("spot", [-1, 7], ids=["off", "not-controlled"])
+def test_without_a_spotlight_every_controlled_marker_is_a_performer(monkeypatch, spot: int) -> None:
+    app = _spot_app(spot=spot, followed=1)
+    _run_multi(app, [_det(0.2, 10), _det(0.5, 20), _det(0.8, 30)], monkeypatch)
+    assert {_track(app, mid) for mid in (1, 2, 3)} == {10, 20, 30}
+
+
+def test_spotlight_turned_off_gets_full_validity_back(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    _run_multi(app, [], monkeypatch)
+    assert app._server.get_marker(3).status == 0.0
+    app._config.detection.spotlight_marker_id = -1
+    app._controlled_ids = [1, 2]
+    _run_multi(app, [], monkeypatch)
+    assert app._server.get_marker(3).status == 1.0
+
+
+def test_spotlight_marker_not_registered_is_skipped(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    del app._server._by_id[3]
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert 3 not in app._detection_pin_states
+
+
+def test_cycle_moves_the_spotlight_between_tracked_performers_only(monkeypatch) -> None:
+    app = _spot_app((1, 2, 3, 4), spot=4)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    det = app._config.detection
+
+    assert cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 1
+    cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 2
+    cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 1
+    cycle_followed_performer(app, -1)
+    assert det.followed_marker_id == 2
+
+
+def test_cycle_backwards_from_nobody_lands_on_the_last_performer(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    cycle_followed_performer(app, -1)
+    assert app._config.detection.followed_marker_id == 2
+
+
+def test_cycle_with_nobody_tracked_offers_every_performer(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [], monkeypatch)
+    cycle_followed_performer(app, +1)
+    assert app._config.detection.followed_marker_id == 1
+
+
+def test_cycle_with_no_performer_markers_changes_nothing(monkeypatch) -> None:
+    app = _spot_app(ids=(3,))
+    assert cycle_followed_performer(app, +1)
+    assert app._config.detection.followed_marker_id == -1
+
+
+@pytest.mark.parametrize("cfg", [{"spot": -1}, {"pin_mode": "assist"}, {"enabled": False}])
+def test_cycle_is_not_handled_without_a_spotlight(cfg) -> None:  # noqa: ANN001
+    app = _spot_app(**cfg)
+    assert not cycle_followed_performer(app, +1)
+
+
+def test_performer_snapshot_names_the_spotlight_and_each_performer(monkeypatch) -> None:
+    app = _spot_app(followed=2)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert performer_snapshot(app) == {
+        "spotlight_marker_id": 3,
+        "followed_marker_id": 2,
+        "performers": [
+            {"marker_id": 1, "tracking": True, "followed": False},
+            {"marker_id": 2, "tracking": False, "followed": True},
+        ],
+    }
+
+
+def test_performer_snapshot_without_a_spotlight_follows_nobody() -> None:
+    app = _spot_app(spot=-1, followed=2)
+    snap = performer_snapshot(app)
+    assert snap["spotlight_marker_id"] is None
+    assert snap["followed_marker_id"] is None
+    assert [p["followed"] for p in snap["performers"]] == [False, False, False]

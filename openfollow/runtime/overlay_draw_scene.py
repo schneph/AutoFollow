@@ -195,7 +195,7 @@ def draw_origin(cr: Any, state: OverlayState, w: int, h: int) -> None:
 def draw_detections(renderer: Any, cr: Any, state: OverlayState, w: int, h: int) -> None:
     default_rgb = parse_hex(state.detection_box_color)
     attached_colors = state.detection_attached_colors
-    cr.set_line_width(state.detection_box_thickness)
+    attached_labels = state.detection_attached_labels
 
     for det in state.detections:
         x1 = det.x1 * w
@@ -211,12 +211,20 @@ def draw_detections(renderer: Any, cr: Any, state: OverlayState, w: int, h: int)
         else:
             r, g, b = default_rgb
 
+        followed = det.track_id == state.detection_followed_track_id
+        cr.set_line_width(state.detection_box_thickness * (2 if followed else 1))
         cr.set_source_rgba(r, g, b, 0.8)
         cr.rectangle(x1, y1, x2 - x1, y2 - y1)
         cr.stroke()
 
+        parts = []
+        marker_label = attached_labels.get(det.track_id)
+        if marker_label:
+            parts.append(f"FOLLOW {marker_label}" if followed else marker_label)
         if state.detection_show_labels:
-            label = f"{det.confidence:.0%}"
+            parts.append(f"{det.confidence:.0%}")
+        if parts:
+            label = "  ".join(parts)
             renderer._set_ui_font(cr, 13)
             ext = cr.text_extents(label)
             cr.set_source_rgba(r, g, b, 0.6)

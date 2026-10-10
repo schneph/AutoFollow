@@ -582,6 +582,25 @@ class TestPublishRuntimeStats:
         services.publish_runtime_stats(force=True)
         assert services.get_runtime_stats_snapshot()["tracking"]["pin_status"] == pytest.approx(0.75)
 
+    @pytest.mark.parametrize(("enabled", "mode"), [(True, "multi"), (True, "assist"), (False, "multi")])
+    def test_all_performers_block_is_published_only_in_that_mode(
+        self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch, enabled: bool, mode: str
+    ) -> None:
+        self._prime(services)
+        import openfollow.video.detection as det
+
+        monkeypatch.setattr(det, "check_detection_dependencies", lambda cfg: [])
+        services._app._config.detection.enabled = enabled
+        services._app._config.detection.pin_mode = mode
+        services._app._controlled_ids = []
+
+        services.publish_runtime_stats(force=True)
+        block = services.get_runtime_stats_snapshot()["tracking"]["all_performers"]
+        if enabled and mode == "multi":
+            assert block == {"spotlight_marker_id": None, "followed_marker_id": None, "performers": []}
+        else:
+            assert block is None
+
     def test_pin_status_is_none_without_a_detector(
         self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch
     ) -> None:

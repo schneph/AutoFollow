@@ -636,6 +636,11 @@ class DetectionConfig:
     # Multi mode: a person entering within this distance of a marker whose
     # performer was lost resumes that marker instead of taking the lowest free one.
     reacquire_radius_m: float = 1.5
+    # Multi mode: a controlled marker that mirrors one chosen performer's marker,
+    # for a desk to follow; ``-1`` = off. It is left out of the performer pool.
+    spotlight_marker_id: int = -1
+    # Multi mode: the performer marker the spotlight mirrors; ``-1`` = none.
+    followed_marker_id: int = -1
     # Master on/off for region-of-interest masking. When False (default) the
     # masks below are inactive and detection runs over the whole frame even if
     # masks are drawn; True confines detection to the union of enabled masks.
@@ -672,6 +677,8 @@ class DetectionConfig:
         self.assist_radius_m = _coerce_float(self.assist_radius_m, 1.0, lo=0.1, hi=50.0)
         self.assist_strength = _coerce_float(self.assist_strength, 0.5, lo=0.0, hi=1.0)
         self.reacquire_radius_m = _coerce_float(self.reacquire_radius_m, 1.5, lo=0.0, hi=50.0)
+        self.spotlight_marker_id = _coerce_int(self.spotlight_marker_id, -1, lo=-1)
+        self.followed_marker_id = _coerce_int(self.followed_marker_id, -1, lo=-1)
         self.masks_enabled = _coerce_bool(self.masks_enabled, False)
         # Convert dict entries (hand-edited TOML / imported config) to
         # dataclasses and drop non-object entries, so the detector thread can

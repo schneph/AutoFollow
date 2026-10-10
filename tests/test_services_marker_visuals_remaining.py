@@ -1896,6 +1896,58 @@ class TestAttachedDetectionBox:
         assert state.detection_attached_colors == {}
 
 
+class TestAllPerformersSpotlight:
+    def _app(self, *, spot: int = 3, followed: int = 1) -> SimpleNamespace:
+        app = _build_app(
+            controlled=[1, 2, 3],
+            viewer=[1, 2, 3],
+            server_markers={mid: _FakeMarker(mid, pos=(float(mid), 0.0, 0.0)) for mid in (1, 2, 3)},
+        )
+        app._marker_catalog = _FakeCatalog({1: ("Lead", "#0652dd"), 2: ("", "#ff0000")})
+        det = app._config.detection
+        det.enabled = True
+        det.pin_mode = "multi"
+        det.spotlight_marker_id = spot
+        det.followed_marker_id = followed
+        app._detection_pin_states[1] = SimpleNamespace(attached_track_id=4, attached_marker_id=1)
+        app._detection_pin_states[2] = SimpleNamespace(attached_track_id=7, attached_marker_id=2)
+        return app
+
+    def test_each_performer_box_is_named_and_the_followed_one_marked(self, pool: OverlayStatePool) -> None:
+        state = _build(self._app(), pool, person_detector=SimpleNamespace(detections=[]))
+        assert state.detection_attached_labels == {4: "Lead", 7: "M2"}
+        assert state.detection_followed_track_id == 4
+
+    def test_cards_tag_the_spotlight_and_the_performer_it_follows(self, pool: OverlayStatePool) -> None:
+        state = _build(self._app(), pool, person_detector=SimpleNamespace(detections=[]))
+        tags = {m.marker_id: m.follow_tag for m in state.markers}
+        assert tags == {1: "FOLLOWED", 2: "", 3: "SPOT > Lead"}
+
+    def test_card_tags_survive_pooled_reuse(self, pool: OverlayStatePool) -> None:
+        app = self._app()
+        _build(app, pool)
+        state = _build(app, pool)
+        assert {m.marker_id: m.follow_tag for m in state.markers}[3] == "SPOT > Lead"
+
+    @pytest.mark.parametrize("followed", [-1, 3, 9], ids=["none", "itself", "not-controlled"])
+    def test_a_spotlight_following_nobody_is_tagged_alone(self, pool: OverlayStatePool, followed: int) -> None:
+        state = _build(self._app(followed=followed), pool, person_detector=SimpleNamespace(detections=[]))
+        assert {m.marker_id: m.follow_tag for m in state.markers} == {1: "", 2: "", 3: "SPOT"}
+        assert state.detection_followed_track_id is None
+
+    def test_without_a_spotlight_boxes_are_named_but_nothing_is_followed(self, pool: OverlayStatePool) -> None:
+        state = _build(self._app(spot=-1), pool, person_detector=SimpleNamespace(detections=[]))
+        assert state.detection_attached_labels == {4: "Lead", 7: "M2"}
+        assert state.detection_followed_track_id is None
+        assert all(not m.follow_tag for m in state.markers)
+
+    def test_other_modes_leave_boxes_unnamed(self, pool: OverlayStatePool) -> None:
+        app = self._app()
+        app._config.detection.pin_mode = "assist"
+        state = _build(app, pool, person_detector=SimpleNamespace(detections=[]))
+        assert state.detection_attached_labels == {}
+
+
 class TestMissingControllerSurfaces:
     """A missing controller shows on its card and in the status badge; Identify lights one card."""
 

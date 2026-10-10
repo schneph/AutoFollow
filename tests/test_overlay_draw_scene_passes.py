@@ -312,6 +312,36 @@ class TestDrawDetections:
         grey = 128 / 255
         assert first_rgba[1:4] == pytest.approx((grey, grey, grey))
 
+    def test_performer_boxes_carry_their_marker_name_and_the_followed_one_is_heavier(self) -> None:
+        state = _scene_state(
+            detection_show_labels=False,
+            detection_box_thickness=2,
+            detection_attached_colors={1: "#ff0000", 2: "#00ff00"},
+            detection_attached_labels={1: "Lead", 2: "M2"},
+            detection_followed_track_id=2,
+        )
+        state.detections = [
+            DetectionBox(x1=0.0, y1=0.2, x2=0.1, y2=0.4, confidence=0.5, track_id=1),
+            DetectionBox(x1=0.5, y1=0.2, x2=0.6, y2=0.4, confidence=0.8, track_id=2),
+            DetectionBox(x1=0.8, y1=0.2, x2=0.9, y2=0.4, confidence=0.8, track_id=3),
+        ]
+        cr = FakeCairo()
+        draw_detections(FakeRenderer(), cr, state, 100, 100)
+
+        assert cr.show_text_strings() == ["Lead", "FOLLOW M2"]
+        assert [c[1] for c in cr.calls if c[0] == "line_width"] == [2, 4, 2]
+
+    def test_performer_label_sits_beside_the_confidence(self) -> None:
+        state = _scene_state(
+            detection_show_labels=True,
+            detection_attached_colors={1: "#ff0000"},
+            detection_attached_labels={1: "Lead"},
+        )
+        state.detections = [DetectionBox(x1=0.0, y1=0.2, x2=0.1, y2=0.4, confidence=0.5, track_id=1)]
+        cr = FakeCairo()
+        draw_detections(FakeRenderer(), cr, state, 100, 100)
+        assert cr.show_text_strings() == ["Lead  50%"]
+
 
 # --------------------------------------------------------------------------- #
 # draw_marker – branch coverage

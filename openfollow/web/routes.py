@@ -2545,6 +2545,35 @@ def _controller_slots_view(server: ConfigWebServer) -> dict[str, Any]:
     return controllers
 
 
+def _performers_view(server: ConfigWebServer, cfg: AppConfig) -> dict[str, Any]:
+    """The All Performers panel: each performer marker, named and coloured as its HUD card is.
+
+    Who is tracked comes from the main loop's stats; who is followed from
+    ``cfg``, so a switch shows at once rather than after the next reload.
+    """
+    block = (server.get_runtime_stats().get("tracking") or {}).get("all_performers") or {}
+    catalog = server.get_marker_catalog()
+    det = cfg.detection
+    spot = det.spotlight_marker_id if det.spotlight_marker_id in cfg.controlled_marker_ids else -1
+
+    def _entry(mid: int) -> dict[str, Any]:
+        entry = catalog.get(mid) if catalog is not None else None
+        return {
+            "marker_id": mid,
+            "label": _catalog_marker_label(mid, catalog),
+            "color": entry.color if entry is not None else AUTO_PICK_ORDER[mid % len(AUTO_PICK_ORDER)].lower(),
+        }
+
+    tracking = {int(p["marker_id"]): bool(p.get("tracking")) for p in block.get("performers") or []}
+    performers = []
+    for mid in sorted(m for m in cfg.controlled_marker_ids if m != spot):
+        row = _entry(mid)
+        row["tracking"] = tracking.get(mid, False)
+        row["followed"] = spot >= 0 and mid == det.followed_marker_id
+        performers.append(row)
+    return {"spotlight": _entry(spot) if spot >= 0 else None, "performers": performers}
+
+
 def _osc_binding_marker_entry(
     token: str,
     catalog: Any,
@@ -2963,6 +2992,8 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "assist_radius_m": _as_float,
     "assist_strength": _as_float,
     "reacquire_radius_m": _as_float,
+    "spotlight_marker_id": _as_int,
+    "followed_marker_id": _as_int,
 }
 
 
@@ -5181,6 +5212,22 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
     def get_controller_slots() -> Any:
         """The Controller Slots table, from the main loop's latest stats snapshot."""
         return template("partials/controller_slots_table", controllers=_controller_slots_view(server))
+
+    @app.get("/section/detection/performers")
+    def get_detection_performers() -> Any:
+        """The All Performers panel, from the main loop's latest stats snapshot."""
+        return template("partials/performers_table", view=_performers_view(server, _request_scoped_config()))
+
+    @app.post("/section/detection/follow/<target:re:none|[0-9]+>")
+    def follow_performer(target: str) -> Any:
+        """Point the spotlight at one performer marker, or at nobody."""
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            marker_id = -1 if target == "none" else int(target)
+            if marker_id < 0 or marker_id in cfg.controlled_marker_ids:
+                cfg.detection.followed_marker_id = marker_id
+                save_config(cfg, server.config_path)
+        return template("partials/performers_table", view=_performers_view(server, cfg))
 
     @app.post("/section/controller_slots/<action:re:identify|forget>/<index:int>")
     def controller_slot_action(action: str, index: int) -> Any:

@@ -102,6 +102,8 @@ class MarkerOverlayData:
     # crosshair + ground ring (no filled ball, no card) so it reads as secondary
     # to the solid marker the operator steers (the manual anchor).
     is_assist_ghost: bool = False
+    # All Performers spotlight role shown on the card ("SPOT > T3", "FOLLOWED").
+    follow_tag: str = ""
 
 
 @dataclass
@@ -285,6 +287,10 @@ class OverlayState:
     # marker's colour: ``{track_id: hex_colour}``. Empty = no highlight. Assist
     # drives every controlled marker, so several boxes can be attached at once.
     detection_attached_colors: dict[int, str] = field(default_factory=dict)
+    # All Performers: ``{track_id: marker label}`` drawn on each performer's box,
+    # and the track the spotlight follows, drawn heavier.
+    detection_attached_labels: dict[int, str] = field(default_factory=dict)
+    detection_followed_track_id: int | None = None
     # Button detection wizard
     button_detection: ButtonDetectionState | None = None
     # Configurable button labels for help overlay (action -> button name)
@@ -417,6 +423,8 @@ class OverlayState:
         self.detection_box_color = "#808080"
         self.detection_box_thickness = 2
         self.detection_attached_colors = {}
+        self.detection_attached_labels = {}
+        self.detection_followed_track_id = None
         self.button_detection = None
         self.button_labels = {}
         self.keyboard_labels = {}

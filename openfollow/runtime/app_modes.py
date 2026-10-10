@@ -18,6 +18,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from openfollow.configuration import save_config
+from openfollow.runtime.services_detection_pin import cycle_followed_performer
 from openfollow.video.failure import SourceKind, VideoFailure, failure_sentence
 
 if TYPE_CHECKING:
@@ -599,7 +600,14 @@ def normalize_key(key: str) -> str:
 
 
 def cycle_marker(app: OpenFollowApp, direction: int) -> None:
-    """Cycle controlled marker selection by *direction* (+1 next, -1 prev)."""
+    """Cycle controlled marker selection by *direction* (+1 next, -1 prev).
+
+    With an All Performers spotlight set up, it moves the spotlight between
+    performers instead.
+    """
+    if cycle_followed_performer(app, direction):
+        _persist_config(app)
+        return
     if not app._controlled_ids:
         return
     selected = app._selected_id

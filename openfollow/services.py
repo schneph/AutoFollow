@@ -43,6 +43,7 @@ from openfollow.runtime.overlay_state import OverlayState
 from openfollow.runtime.services_detection_pin import (
     apply_detection_pin as apply_detection_pin_helper,
 )
+from openfollow.runtime.services_detection_pin import performer_snapshot
 from openfollow.runtime.services_frame import (
     prepare_overlay_state_swap,
 )
@@ -3778,6 +3779,7 @@ class AppRuntimeServices:
                 "tracked_people": 0,
                 "pinned_track_id": None,
                 "pin_status": None,
+                "all_performers": None,
                 "last_inference_age_ms": None,
                 "missing_deps": [],
             },
@@ -3962,6 +3964,9 @@ class AppRuntimeServices:
         if self._person_detector is not None:
             detection_snapshot = dict(self._person_detector.performance_stats)
         detection_snapshot["pin_status"] = self._detection_pin_status()
+        detection_snapshot["all_performers"] = (
+            performer_snapshot(self._app) if cfg.detection.enabled and cfg.detection.pin_mode == "multi" else None
+        )
         detection_snapshot["missing_deps"] = self._resolve_detection_missing_deps(
             cfg.detection,
             now_monotonic,

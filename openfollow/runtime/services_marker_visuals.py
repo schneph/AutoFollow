@@ -21,7 +21,7 @@ from openfollow.runtime.overlay_state import (
     OverlayState,
     VirtualFaderDisplayData,
 )
-from openfollow.runtime.services_detection_pin import is_assist_controlled
+from openfollow.runtime.services_detection_pin import is_assist_controlled, spotlight_marker_id
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.runtime_metrics import OverlayStatePool
 from openfollow.station_fqdn import web_ui_host
@@ -188,6 +188,21 @@ def _resolve_marker_name(app: Any, marker_id: int) -> str:
     if entry is None:
         return ""
     return str(entry.name)
+
+
+def _marker_label(app: Any, marker_id: int) -> str:
+    return _resolve_marker_name(app, marker_id) or f"M{marker_id}"
+
+
+def _follow_tags(app: Any) -> dict[int, str]:
+    """Card tags naming the All Performers spotlight and the performer it follows."""
+    spot = spotlight_marker_id(app)
+    if spot is None:
+        return {}
+    followed = app._config.detection.followed_marker_id
+    if followed < 0 or followed == spot or followed not in app._controlled_ids:
+        return {spot: "SPOT"}
+    return {spot: f"SPOT > {_marker_label(app, followed)}", followed: "FOLLOWED"}
 
 
 def sync_marker_config(state: OverlayState, cfg: Any) -> None:
@@ -457,6 +472,7 @@ def build_marker_visual_state(
     }
     # The card an Identify has lit this frame, if any.
     flash_marker = app._input_manager.identify_flash_marker() if app._input_manager is not None else None
+    follow_tags = _follow_tags(app)
 
     state = overlay_state_pool.acquire()
 
@@ -669,6 +685,7 @@ def build_marker_visual_state(
             td.is_controlled = is_controlled
             td.name = name
             td.marker_fader = marker_fader
+            td.follow_tag = follow_tags.get(marker_id, "")
         else:
             td = MarkerOverlayData(
                 marker_id=marker_id,
@@ -685,6 +702,7 @@ def build_marker_visual_state(
                 is_controlled=is_controlled,
                 name=name,
                 marker_fader=marker_fader,
+                follow_tag=follow_tags.get(marker_id, ""),
             )
         state.markers.append(td)
         marker_idx += 1
@@ -726,10 +744,22 @@ def build_marker_visual_state(
         # operator can see which detection is driving each followspot. Assist
         # drives every controlled marker, so several boxes can be attached.
         attached_colors: dict[int, str] = {}
+        attached_labels: dict[int, str] = {}
+        followed_track: int | None = None
+        multi = dc.pin_mode == "multi"
+        spot = spotlight_marker_id(app)
         for st in app._detection_pin_states.values():
             if st.attached_track_id is not None and st.attached_marker_id is not None:
                 attached_colors[st.attached_track_id] = _resolve_marker_color(app, st.attached_marker_id)
+                if multi:
+                    # Name each performer's box after its marker so the operator
+                    # can tell who is who and pick whom the spotlight follows.
+                    attached_labels[st.attached_track_id] = _marker_label(app, st.attached_marker_id)
+                    if spot is not None and st.attached_marker_id == dc.followed_marker_id:
+                        followed_track = st.attached_track_id
         state.detection_attached_colors = attached_colors
+        state.detection_attached_labels = attached_labels
+        state.detection_followed_track_id = followed_track
 
     if app._button_detection is not None:
         state.button_detection = app._button_detection.get_state()

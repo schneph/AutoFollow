@@ -108,6 +108,24 @@ def test_reacquire_radius_shows_only_in_multi_mode() -> None:
     assert re.search(r"data-multi-only\s+hidden", _render(config=assist_cfg))
 
 
+def test_all_performers_offers_a_spotlight_picker_and_the_performers_panel() -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2]
+    cfg.detection.enabled = True
+    cfg.detection.pin_mode = "multi"
+    cfg.detection.spotlight_marker_id = 2
+    html = _render(config=cfg)
+    assert '<option value="2" selected>Marker 2</option>' in html
+    assert '<option value="-1" >Off</option>' in html
+    assert 'hx-get="/section/detection/performers"' in html
+
+
+def test_spotlight_picker_keeps_a_marker_that_is_no_longer_controlled() -> None:
+    cfg = AppConfig()
+    cfg.detection.spotlight_marker_id = 5
+    assert '<option value="5" selected disabled>Marker 5 (unavailable)</option>' in _render(config=cfg)
+
+
 def test_no_removed_fields_rendered() -> None:
     # CLAHE, the visible inference-size select, the standalone enabled checkbox,
     # and the pin_marker checkbox were all dropped in the refactor.

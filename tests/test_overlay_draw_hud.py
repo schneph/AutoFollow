@@ -1370,6 +1370,19 @@ class TestMarkerCard:
         )
         assert any("F 0.42" in t for t in cr.show_text_strings())
 
+    def test_spotlight_role_replaces_the_speed_line(self) -> None:
+        """An All Performers spotlight or followed performer shows its role where
+        the speed sits, and a fader readout does not crowd it."""
+        state = _base_state()
+        cr = FakeCairo()
+        marker = _marker(marker_id=2, speed=1.0)
+        marker.follow_tag = "SPOT > Lead"
+        marker.marker_fader = 0.42
+        draw_marker_card(FakeRenderer(state=state), cr, x=0, y=0, w=180, h=64, t=marker, selected=False, state=state)
+        shown = cr.show_text_strings()
+        assert "SPOT > Lead" in shown
+        assert not any("m/s" in t or "F 0.42" in t for t in shown)
+
     def test_selected_card_uses_larger_stroke_and_accent_label(self) -> None:
         state = _base_state()
         cr_sel = FakeCairo()

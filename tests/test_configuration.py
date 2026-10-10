@@ -3216,6 +3216,20 @@ def test_detection_config_clamps_reacquire_radius(bad_radius: object, expected: 
     assert cfg.reacquire_radius_m == pytest.approx(expected)
 
 
+def test_detection_config_spotlight_defaults_off() -> None:
+    cfg = DetectionConfig()
+    assert (cfg.spotlight_marker_id, cfg.followed_marker_id) == (-1, -1)
+
+
+@pytest.mark.parametrize("field_name", ["spotlight_marker_id", "followed_marker_id"])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(4, 4), ("7", 7), (-9, -1), ("lead", -1), (None, -1), (True, -1), (2.9, 2)],
+)
+def test_detection_config_coerces_spotlight_ids(field_name: str, raw: object, expected: int) -> None:
+    assert getattr(DetectionConfig(**{field_name: raw}), field_name) == expected  # type: ignore[arg-type]
+
+
 def test_detection_config_assist_strength_default() -> None:
     """Default clip strength 0.5 blends the AI-corrected output halfway
     between the manual anchor and the detected person, leaving operator

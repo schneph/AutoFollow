@@ -21,9 +21,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from openfollow.configuration import AppConfig
 from openfollow.runtime import app_modes
 
 pytestmark = pytest.mark.unit
+
+
+def _cycle_app(**kwargs: object) -> SimpleNamespace:
+    return SimpleNamespace(_config=AppConfig(), **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # cycle_marker
@@ -31,19 +37,42 @@ pytestmark = pytest.mark.unit
 
 
 def test_cycle_marker_noop_when_empty() -> None:
-    app = SimpleNamespace(_controlled_ids=[], _selected_id=None)
+    app = _cycle_app(_controlled_ids=[], _selected_id=None)
     app_modes.cycle_marker(app, +1)
     assert app._selected_id is None
 
 
+def test_cycle_marker_moves_the_all_performers_spotlight_and_saves_it(monkeypatch) -> None:  # noqa: ANN001
+    saved: list[int] = []
+    monkeypatch.setattr(app_modes, "save_config", lambda cfg, _path: saved.append(cfg.detection.followed_marker_id))
+    app = _cycle_app(
+        _controlled_ids=[1, 2, 3],
+        _selected_id=1,
+        _server=SimpleNamespace(get_marker=lambda _mid: object()),
+        _detection_pin_states={},
+        _config_path="config.toml",
+        _get_config_mtime=lambda: 5.0,
+    )
+    det = app._config.detection
+    det.enabled, det.pin_mode, det.spotlight_marker_id = True, "multi", 3
+
+    app_modes.cycle_marker(app, +1)
+
+    assert det.followed_marker_id == 1
+    assert saved == [1]
+    assert app._config_mtime == 5.0
+    # Moving the spotlight leaves the marker selection alone.
+    assert app._selected_id == 1
+
+
 def test_cycle_marker_forward_wraps() -> None:
-    app = SimpleNamespace(_controlled_ids=[1, 2, 3], _selected_id=3)
+    app = _cycle_app(_controlled_ids=[1, 2, 3], _selected_id=3)
     app_modes.cycle_marker(app, +1)
     assert app._selected_id == 1
 
 
 def test_cycle_marker_backward_wraps() -> None:
-    app = SimpleNamespace(_controlled_ids=[1, 2, 3], _selected_id=1)
+    app = _cycle_app(_controlled_ids=[1, 2, 3], _selected_id=1)
     app_modes.cycle_marker(app, -1)
     assert app._selected_id == 3
 
@@ -51,13 +80,13 @@ def test_cycle_marker_backward_wraps() -> None:
 def test_cycle_marker_selects_first_when_current_missing_forward() -> None:
     """If ``_selected_id`` is not a member, forward step starts from -1 →
     index 0. Covers the ValueError fallback branch."""
-    app = SimpleNamespace(_controlled_ids=[4, 5, 6], _selected_id=99)
+    app = _cycle_app(_controlled_ids=[4, 5, 6], _selected_id=99)
     app_modes.cycle_marker(app, +1)
     assert app._selected_id == 4
 
 
 def test_cycle_marker_selects_last_when_current_missing_backward() -> None:
-    app = SimpleNamespace(_controlled_ids=[4, 5, 6], _selected_id=99)
+    app = _cycle_app(_controlled_ids=[4, 5, 6], _selected_id=99)
     app_modes.cycle_marker(app, -1)
     # idx = 0 (else branch), step = -1 → index -1 → 6
     assert app._selected_id == 6
@@ -2486,13 +2515,13 @@ def test_process_settings_menu_input_noop_when_input_manager_none() -> None:
 
 
 def test_cycle_marker_with_no_selection_advances_forward() -> None:
-    app = SimpleNamespace(_controlled_ids=[10, 20, 30], _selected_id=None)
+    app = _cycle_app(_controlled_ids=[10, 20, 30], _selected_id=None)
     app_modes.cycle_marker(app, +1)
     assert app._selected_id == 10
 
 
 def test_cycle_marker_with_no_selection_advances_backward() -> None:
-    app = SimpleNamespace(_controlled_ids=[10, 20, 30], _selected_id=None)
+    app = _cycle_app(_controlled_ids=[10, 20, 30], _selected_id=None)
     app_modes.cycle_marker(app, -1)
     assert app._selected_id == 30
 

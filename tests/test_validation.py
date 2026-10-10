@@ -1194,3 +1194,8 @@ def test_validate_accepts_multi_pin_mode() -> None:
 @pytest.mark.parametrize(("raw", "ok"), [("0", True), ("1.5", True), ("50", True), ("-0.1", False), ("51", False)])
 def test_validate_reacquire_radius_range(raw: str, ok: bool) -> None:
     assert (validate("detection", "reacquire_radius_m", raw) is None) is ok
+
+
+@pytest.mark.parametrize(("raw", "ok"), [("-1", True), ("0", True), ("12", True), ("-2", False), ("lead", False)])
+def test_validate_spotlight_marker_id(raw: str, ok: bool) -> None:
+    assert (validate("detection", "spotlight_marker_id", raw) is None) is ok

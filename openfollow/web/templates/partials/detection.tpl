@@ -175,7 +175,25 @@
                            aria-describedby="detection-reacquire-radius-m-error" aria-invalid="false">
                     <span id="detection-reacquire-radius-m-error" class="field-error"></span>
                 </div>
+                <div class="field">
+                    <label for="detection-spotlight-marker-id">Spotlight marker</label>
+%     saved_spot = det.spotlight_marker_id
+                    <select id="detection-spotlight-marker-id" name="spotlight_marker_id">
+                        <option value="-1" {{'selected' if saved_spot < 0 else ''}}>Off</option>
+%     if saved_spot >= 0 and saved_spot not in config.controlled_marker_ids:
+                        <option value="{{saved_spot}}" selected disabled>Marker {{saved_spot}} (unavailable)</option>
+%     end
+% for marker_id in config.controlled_marker_ids:
+                        <option value="{{marker_id}}" {{'selected' if saved_spot == marker_id else ''}}>Marker {{marker_id}}</option>
+% end
+                    </select>
+                </div>
             </div>
+            <div id="performers-content"
+                 hx-get="/section/detection/performers"
+                 hx-trigger="load, every 1s [!this.closest('[data-multi-only]').hidden && !this.closest('.section').classList.contains('is-collapsed')]"
+                 hx-target="this"
+                 hx-swap="innerHTML"></div>
         </div>
 
         <div class="actions">
