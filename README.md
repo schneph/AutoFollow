@@ -69,7 +69,7 @@ macOS asks for camera access. The web control page opens at `http://localhost:80
 
 ### Windows
 
-A Windows installer is in progress and will be published on the [Releases](../../releases) page.
+A Windows version has been released and is awaiting full testing.
 
 ### From source
 
