@@ -102,6 +102,10 @@ def usb_camera_names() -> list[str]:
             from openfollow.video.inputs.avf import _discover_avf_devices
 
             return [d["name"] for d in _discover_avf_devices() if d.get("name")]
+        if system == "Windows":
+            from openfollow.video.inputs.mf import _discover_mf_devices
+
+            return [d["name"] for d in _discover_mf_devices() if d.get("name")]
     except Exception:  # noqa: BLE001 – never abort the bundle on a backend hiccup
         logger.warning("usb_camera_names enumeration failed", exc_info=True)
     return []

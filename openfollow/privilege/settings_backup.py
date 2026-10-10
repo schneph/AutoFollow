@@ -23,7 +23,6 @@ import errno
 import io
 import json
 import os
-import pwd
 import re
 import stat
 import sys
@@ -35,6 +34,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import tomllib
+
+try:
+    import pwd
+except ImportError:  # Windows has no user database; only the Linux preinst reads it.
+    pwd = None  # type: ignore[assignment]
 
 __all__ = [
     "ARCHIVE_SUFFIX",

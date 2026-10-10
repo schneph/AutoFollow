@@ -13,9 +13,8 @@ name: release-deb
 # matches the Trixie image; the ubuntu-24.04 hosts ship 3.12. The image job runs on
 # the host directly (mmdebstrap bootstraps the Trixie rootfs regardless) and stays
 # arm64-only – x86 is .deb / .ofupdate only, with no appliance image.
+# Run by hand only: AutoFollow releases ship the macOS and Windows installers.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:

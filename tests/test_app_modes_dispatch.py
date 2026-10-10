@@ -1317,6 +1317,48 @@ def test_open_web_ui_external_swallows_launch_failure(monkeypatch: pytest.Monkey
     app_modes.open_web_ui_external(app)  # must not raise
 
 
+def test_open_web_ui_external_uses_startfile_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no ``open`` binary; the URL goes to ``os.startfile``."""
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "platform", "win32")
+    opened: list[str] = []
+    monkeypatch.setattr(app_modes.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(app_modes.subprocess, "run", lambda *_a, **_kw: pytest.fail("must not shell out"))
+    app = _make_settings_menu_app()
+    app._web_server = None
+    app_modes.open_web_ui_external(app)
+    assert opened == ["http://127.0.0.1/"]
+
+
+def test_open_web_ui_external_swallows_startfile_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys as _sys
+
+    def _boom(_url: str) -> None:
+        raise OSError("no browser registered")
+
+    monkeypatch.setattr(_sys, "platform", "win32")
+    monkeypatch.setattr(app_modes.os, "startfile", _boom, raising=False)
+    app = _make_settings_menu_app()
+    app._web_server = None
+    app_modes.open_web_ui_external(app)  # must not raise
+
+
+def test_settings_menu_web_ui_enabled_on_windows_without_webkit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows opens the default browser, so the row never needs WebKit."""
+    import sys as _sys
+
+    from openfollow.runtime import webkit_browser
+
+    monkeypatch.setattr(_sys, "platform", "win32")
+    monkeypatch.setattr(webkit_browser, "AVAILABLE", False)
+    app = _make_settings_menu_app(has_controller=True, has_source=True)
+    labels, enabled, reasons, _opens = app_modes.build_settings_menu_items(app)
+    idx = [action for _l, action, _o in app_modes._SETTINGS_MENU_ITEMS].index("web_ui")
+    assert enabled[idx] is True
+    assert reasons[idx] == ""
+
+
 def _make_minimal_app_for_dispatch() -> SimpleNamespace:
     """Bare app with every state flag and gate the network dispatch checks."""
     from openfollow.configuration import AppConfig

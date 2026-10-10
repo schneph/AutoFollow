@@ -35,12 +35,12 @@ export DYLD_FALLBACK_LIBRARY_PATH="${BREW_PREFIX}/lib:/usr/local/lib:/usr/lib${D
 
 VERSION="$(poetry run python -c 'import openfollow; print(openfollow.__version__)')"
 ARCH="$(uname -m)"
-APP="$DIST/OpenFollow.app"
-DMG="$DIST/OpenFollow-${VERSION}-${ARCH}.dmg"
+APP="$DIST/AutoFollow.app"
+DMG="$DIST/AutoFollow-${VERSION}-${ARCH}.dmg"
 
-echo "==> Building OpenFollow ${VERSION} (${ARCH})"
+echo "==> Building AutoFollow ${VERSION} (${ARCH})"
 
-rm -rf "$REPO/build" "$DIST/OpenFollow" "$APP" "$BUILD"
+rm -rf "$REPO/build" "$DIST/AutoFollow" "$APP" "$BUILD"
 mkdir -p "$BUILD/models" "$DIST"
 
 echo "==> Rendering icon"
@@ -119,7 +119,7 @@ echo "==> Ad-hoc signing"
 codesign --force --deep --sign - "$APP"
 
 echo "==> Self-checking bundle (scrubbed env)"
-if ! env -i HOME="$HOME" OPENFOLLOW_SELFCHECK=1 "$APP/Contents/MacOS/OpenFollow" | grep -q '^OK$'; then
+if ! env -i HOME="$HOME" OPENFOLLOW_SELFCHECK=1 "$APP/Contents/MacOS/AutoFollow" | grep -q '^OK$'; then
   echo "Bundle self-check failed - the frozen native stack is incomplete." >&2
   exit 1
 fi
@@ -128,9 +128,9 @@ echo "==> Building DMG"
 rm -f "$DMG"
 if command -v create-dmg >/dev/null 2>&1; then
   create-dmg \
-    --volname "OpenFollow ${VERSION}" \
+    --volname "AutoFollow ${VERSION}" \
     --window-size 640 360 \
-    --icon "OpenFollow.app" 160 180 \
+    --icon "AutoFollow.app" 160 180 \
     --app-drop-link 480 180 \
     "$DMG" "$APP" || true
 fi
@@ -139,7 +139,7 @@ if [[ ! -f "$DMG" ]]; then
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname "OpenFollow ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+  hdiutil create -volname "AutoFollow ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
   rm -rf "$STAGE"
 fi
 

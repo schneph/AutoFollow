@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_NAME = "OpenFollow"
+APP_NAME = "AutoFollow"
 
 
 def _meipass() -> Path:
@@ -34,7 +34,11 @@ def _set_path(var: str, path: Path | None) -> None:
 
 
 def _writable_cache_dir() -> Path:
-    cache = Path.home() / "Library" / "Caches" / APP_NAME
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        cache = (Path(local) if local else Path.home() / "AppData" / "Local") / APP_NAME / "cache"
+    else:
+        cache = Path.home() / "Library" / "Caches" / APP_NAME
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 
@@ -86,7 +90,7 @@ def configure(root: Path) -> None:
     share = _first_existing(root / "share")
     if share is not None:
         existing = os.environ.get("XDG_DATA_DIRS", "")
-        os.environ["XDG_DATA_DIRS"] = f"{share}:{existing}" if existing else str(share)
+        os.environ["XDG_DATA_DIRS"] = f"{share}{os.pathsep}{existing}" if existing else str(share)
     _set_path(
         "GSETTINGS_SCHEMA_DIR",
         _first_existing(root / "share" / "glib-2.0" / "schemas"),

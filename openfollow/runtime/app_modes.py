@@ -10,6 +10,7 @@ flags; ``process_input`` gates direct marker control behind the active modal."""
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -304,6 +305,9 @@ def _back_to_settings(app: OpenFollowApp) -> None:
 
 # ``opens`` marks an entry that takes the operator to another screen rather
 # than doing something where they stand. Restart is the only one that acts.
+# Platforms whose "Open Web UI" row launches the default browser.
+_EXTERNAL_BROWSER_PLATFORMS = ("darwin", "win32")
+
 _SETTINGS_MENU_ITEMS: tuple[tuple[str, str, bool], ...] = (
     ("Network Interfaces", "network", True),
     # Single guided entry point for everything video: the operator picks a
@@ -413,10 +417,10 @@ def build_settings_menu_items(
             # specific capabilities here.
             is_enabled = has_video
         elif action == "web_ui":
-            # macOS has no usable embedded WebKitGTK overlay, so the row opens
-            # the system default browser instead – always available there. On
-            # Linux the embedded overlay needs the WebKit2 typelib.
-            if sys.platform == "darwin":
+            # macOS and Windows have no usable embedded WebKitGTK overlay, so the
+            # row opens the system default browser instead – always available
+            # there. On Linux the embedded overlay needs the WebKit2 typelib.
+            if sys.platform in _EXTERNAL_BROWSER_PLATFORMS:
                 is_enabled = True
             else:
                 is_enabled = has_browser
@@ -512,10 +516,10 @@ def _settings_menu_move(app: OpenFollowApp, step: int) -> None:
 
 
 def open_web_ui_external(app: OpenFollowApp) -> None:
-    """Open the local web UI in the system default browser (macOS).
+    """Open the local web UI in the system default browser (macOS / Windows).
 
-    macOS has no usable embedded WebKitGTK overlay, so the "Open Web UI" action
-    hands the loopback URL to the default browser via ``open``. The web server
+    Neither has a usable embedded WebKitGTK overlay, so the "Open Web UI" action
+    hands the loopback URL to the default browser (``open`` / ``os.startfile``). The web server
     is already listening; this only launches a viewer. Best-effort: a failure is
     logged, never raised, so a missing browser can't crash the input loop.
     """
@@ -523,7 +527,10 @@ def open_web_ui_external(app: OpenFollowApp) -> None:
 
     url = webkit_browser.build_url(app._config, web_server=getattr(app, "_web_server", None))
     try:
-        subprocess.run(["open", url], check=True)
+        if sys.platform == "win32":
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606  # nosec B606 – loopback web UI URL, Windows-only API
+        else:
+            subprocess.run(["open", url], check=True)
     except (OSError, subprocess.SubprocessError):
         logger.exception("Failed to open the web UI in the default browser: %s", url)
 
@@ -544,9 +551,9 @@ def _settings_menu_confirm(app: OpenFollowApp) -> None:
     elif action == "button_detection":
         app._enter_button_detection()
     elif action == "web_ui":
-        # macOS opens the system default browser; Linux mounts the embedded
-        # WebKitGTK overlay.
-        if sys.platform == "darwin":
+        # macOS and Windows open the system default browser; Linux mounts the
+        # embedded WebKitGTK overlay.
+        if sys.platform in _EXTERNAL_BROWSER_PLATFORMS:
             open_web_ui_external(app)
         else:
             app._enter_browser()
