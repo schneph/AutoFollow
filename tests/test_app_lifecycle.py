@@ -74,6 +74,9 @@ class _FakeRuntimeServices:
     def init_rttrpm(self) -> None:
         self.calls.append("init_rttrpm")
 
+    def init_dmx_output(self) -> None:
+        self.calls.append("init_dmx_output")
+
     def init_osc_transmitters(self) -> None:
         self.calls.append("init_osc_transmitters")
 
@@ -204,6 +207,7 @@ class TestRun:
             "init_markers",
             "init_otp",
             "init_rttrpm",
+            "init_dmx_output",
             "init_osc_transmitters",
             "init_psn_receiver",
             "init_zone_engine",
@@ -239,7 +243,7 @@ class TestRun:
         calls = app._runtime_services.calls
         # Foundational PSN failed → the server-dependent group is skipped.
         assert "init_psn" in calls
-        for skipped in ("init_markers", "init_otp", "init_rttrpm", "init_osc_transmitters"):
+        for skipped in ("init_markers", "init_otp", "init_rttrpm", "init_dmx_output", "init_osc_transmitters"):
             assert skipped not in calls
         # Independent inits still run.
         assert "init_psn_receiver" in calls

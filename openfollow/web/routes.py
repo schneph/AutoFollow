@@ -58,16 +58,20 @@ from openfollow.configuration import (
     VALID_BUTTON_NAMES,
     AppConfig,
     DetectionMaskConfig,
+    DmxOutputConfig,
+    MovingLightConfig,
     OscDestinationConfig,
     OscTransmitterConfig,
     TriggerZoneConfig,
     _coerce_marker_tokens,
+    _filter_known,
     apply_renamed_marker_keys,
     config_write_lock,
     load_config,
     save_config,
     viewed_with_controlled,
 )
+from openfollow.dmx.server import fixture_pose, fixture_travel
 from openfollow.input.mouse3d_status import status_key
 
 # Module-level so handler closures resolve ``save_catalog`` from this
@@ -93,6 +97,7 @@ from openfollow.network.validate import (
 from openfollow.palette import AUTO_PICK_ORDER
 from openfollow.privilege.camera_config import AUTOMATIC
 from openfollow.runtime.diagnostics_export import WEB, ExportStatus, status_lines
+from openfollow.scene.pan_tilt import MIN_MARKS, CalibrationMark, solve_pose
 from openfollow.station_fqdn import canonical_host, fqdn_problem
 from openfollow.templates import (
     TEMPLATE_FILE_SUFFIX,
@@ -2979,6 +2984,22 @@ def _apply_osc_binding_fields(
             row.enabled = False
 
 
+def _moving_light_marks(cfg: AppConfig) -> list[dict[str, Any]]:
+    """The grid's four corners and centre, as floor marks a light can be aimed at."""
+    grid = cfg.grid
+    hw, hd = grid.width / 2.0, grid.depth / 2.0
+    ox, oy, oz = grid.x_offset, grid.y_offset, grid.z_offset
+    # PSN +X is stage left, so the stage-left corners sit at +hw.
+    points = [
+        ("Downstage left", ox + hw, oy - hd),
+        ("Downstage right", ox - hw, oy - hd),
+        ("Upstage right", ox - hw, oy + hd),
+        ("Upstage left", ox + hw, oy + hd),
+        ("Centre", ox, oy),
+    ]
+    return [{"label": label, "x": round(x, 3), "y": round(y, 3), "z": round(oz, 3)} for label, x, y in points]
+
+
 def _apply_osc_destination_fields(
     dest: OscDestinationConfig,
     data: Mapping[str, Any],
@@ -2990,6 +3011,37 @@ def _apply_osc_destination_fields(
             current = getattr(dest, field_name)
             setattr(dest, field_name, parser(data[field_name], current))
     dest.__post_init__()
+
+
+_DMX_OUTPUT_FIELD_PARSERS: dict[str, _FieldParser] = {
+    "enabled": _as_bool,
+    "protocol": _as_str,
+    "host": _as_str,
+    "fps": _as_int,
+    "priority": _as_int,
+}
+
+_MOVING_LIGHT_FIELD_PARSERS: dict[str, _FieldParser] = {
+    "name": _as_str,
+    "enabled": _as_bool,
+    "marker_id": _as_int,
+    "universe": _as_int,
+    "address": _as_int,
+    "pan_channel": _as_int,
+    "tilt_channel": _as_int,
+    "fine": _as_bool,
+    "pan_range": _as_float,
+    "tilt_range": _as_float,
+    "invert_pan": _as_bool,
+    "invert_tilt": _as_bool,
+    "mounting": _as_str,
+    "pos_x": _as_float,
+    "pos_y": _as_float,
+    "pos_z": _as_float,
+    "heading": _as_float,
+    "base_pitch": _as_float,
+    "base_roll": _as_float,
+}
 
 
 _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
@@ -3114,7 +3166,8 @@ def _config_dict_redacted(cfg: AppConfig) -> dict[str, Any]:
 _BROADCAST_EXCLUDED_SECTIONS = frozenset(
     # ``interface_assignment`` names NICs on this box; copying it to a peer
     # would repin that peer's PSN and OTP to an interface it may not have.
-    {"osc_destinations", "osc_transmitters", "trigger_zones", "interface_assignment"},
+    # ``dmx_output`` drives lights: two stations sending one universe would fight over it.
+    {"osc_destinations", "osc_transmitters", "trigger_zones", "interface_assignment", "dmx_output"},
 )
 
 
@@ -3266,6 +3319,9 @@ def _apply_import_data(
             cfg.osc_destinations = OscDestinationsConfig(destinations=dests)
             for dest in cfg.osc_destinations.destinations:
                 dest.source_iface = pins.get(dest.id, "")
+
+    if "dmx_output" in data and isinstance(data["dmx_output"], dict):
+        cfg.dmx_output = DmxOutputConfig(**_filter_known(DmxOutputConfig, data["dmx_output"]))
 
     # Trigger zones: import global settings + zones list atomically
     if "trigger_zones" in data and isinstance(data["trigger_zones"], dict):
@@ -5199,6 +5255,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             on_device=_is_on_device_request(),
             cancel_button=_cancel_button_label(config),
             psn_source_advisory=server.get_psn_source_advisory(),
+            calibration_marks=_moving_light_marks(config),
             **_build_input_template_data(config, server.get_runtime_stats().get("video")),
         )
 
@@ -7616,6 +7673,131 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             if moved:
                 save_config(cfg, server.config_path)
         return _render_osc_destinations_section(cfg, saved=moved, focus_id=dest_id)
+
+    # Moving lights: the output's own settings plus one row per fixture, each row
+    # with a Calibrate panel that aims the light by hand and fits its position.
+
+    def _render_dmx_output(cfg: AppConfig, *, saved: bool = False, focus_id: str = "") -> Any:
+        return template(
+            "partials/dmx_output",
+            config=cfg,
+            saved=saved,
+            focus_id=focus_id,
+            calibration_marks=_moving_light_marks(cfg),
+        )
+
+    @app.get("/section/dmx_output")
+    def get_dmx_output_section() -> Any:
+        return _render_dmx_output(_request_scoped_config())
+
+    @app.post("/section/dmx_output")
+    def save_dmx_output() -> Any:
+        form_data: dict[str, Any] = dict(request.forms)
+        form_data["enabled"] = "enabled" in request.forms
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            _apply_parsed_updates(cfg.dmx_output, form_data, _DMX_OUTPUT_FIELD_PARSERS)
+            cfg.dmx_output.__post_init__()
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True)
+
+    @app.post("/section/moving_lights/add")
+    def add_moving_light() -> Any:
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            number = len(cfg.dmx_output.fixtures) + 1
+            fixture = MovingLightConfig(
+                name=f"Light {number}",
+                marker_id=cfg.controlled_marker_ids[0] if cfg.controlled_marker_ids else 0,
+            )
+            cfg.dmx_output.fixtures.append(fixture)
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True, focus_id=fixture.id)
+
+    @app.post("/section/moving_light/<fixture_id>")
+    def save_moving_light(fixture_id: str) -> Any:
+        form_data: dict[str, Any] = dict(request.forms)
+        for name in ("enabled", "fine", "invert_pan", "invert_tilt"):
+            form_data[name] = name in request.forms
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            fixture = cfg.dmx_output.fixture(fixture_id)
+            if fixture is None:
+                abort(404, "Unknown moving light")
+                return ""  # pragma: no cover – abort() raises first
+            _apply_parsed_updates(fixture, form_data, _MOVING_LIGHT_FIELD_PARSERS)
+            fixture.__post_init__()
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True, focus_id=fixture_id)
+
+    @app.post("/section/moving_light/<fixture_id>/delete")
+    def delete_moving_light(fixture_id: str) -> Any:
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            fixtures = cfg.dmx_output.fixtures
+            kept = [f for f in fixtures if f.id != fixture_id]
+            if len(kept) != len(fixtures):
+                cfg.dmx_output.fixtures = kept
+                save_config(cfg, server.config_path)
+        server.aim_moving_light(fixture_id, None)
+        return _render_dmx_output(cfg, saved=True)
+
+    @app.post("/api/moving_light/<fixture_id>/aim")
+    def aim_moving_light(fixture_id: str) -> Any:
+        """Point a light by hand while calibrating (``{"pan", "tilt"}`` 0..1), or ``{"release": true}``."""
+        data = _load_json_body()
+        if not isinstance(data, dict):
+            return _save_failed(400, "Send pan and tilt.")
+        if data.get("release"):
+            server.aim_moving_light(fixture_id, None)
+            return {"aimed": False}
+        try:
+            pan, tilt = float(data["pan"]), float(data["tilt"])
+        except (KeyError, TypeError, ValueError):
+            return _save_failed(400, "Pan and tilt must be numbers from 0 to 1.")
+        if not (0.0 <= pan <= 1.0 and 0.0 <= tilt <= 1.0):
+            return _save_failed(400, "Pan and tilt must be numbers from 0 to 1.")
+        if _request_scoped_config().dmx_output.fixture(fixture_id) is None:
+            return _save_failed(404, "This light is no longer set up. Reload the page.")
+        if not server.aim_moving_light(fixture_id, (pan, tilt)):
+            return _save_failed(409, "The moving lights output is off.", "Switch it on and save it first.")
+        return {"aimed": True}
+
+    @app.post("/api/moving_light/<fixture_id>/solve")
+    def solve_moving_light(fixture_id: str) -> Any:
+        """Fit a light's position and heading to the marks it was aimed at (no save)."""
+        data = _load_json_body()
+        fixture = _request_scoped_config().dmx_output.fixture(fixture_id)
+        if fixture is None:
+            return _save_failed(404, "This light is no longer set up. Reload the page.")
+        raw_marks = data.get("marks") if isinstance(data, dict) else None
+        if not isinstance(raw_marks, list):
+            return _save_failed(400, "Send the recorded marks.")
+        try:
+            marks = [
+                CalibrationMark(float(m["x"]), float(m["y"]), float(m["z"]), float(m["pan"]), float(m["tilt"]))
+                for m in raw_marks
+            ]
+        except (KeyError, TypeError, ValueError):
+            return _save_failed(400, "Every mark needs a position and a pan and tilt.")
+        if len(marks) < MIN_MARKS:
+            return _save_failed(400, f"Record at least {MIN_MARKS} marks, spread across the stage.")
+        if not all(math.isfinite(v) for m in marks for v in (m.x, m.y, m.z, m.pan, m.tilt)):
+            return _save_failed(400, "Every mark needs a position and a pan and tilt.")
+        result = solve_pose(marks, fixture_travel(fixture), fixture_pose(fixture))
+        if result is None:
+            return _save_failed(422, "The marks do not fit one position. Check each was aimed at the right mark.")
+        pose = result.pose
+        return {
+            "pos_x": round(pose.x, 3),
+            "pos_y": round(pose.y, 3),
+            "pos_z": round(pose.z, 3),
+            "heading": round(pose.heading, 2),
+            "base_pitch": round(pose.pitch, 2),
+            "base_roll": round(pose.roll, 2),
+            "errors_deg": [round(e, 2) for e in result.errors_deg],
+            "worst_deg": round(result.worst_deg, 2),
+        }
 
     @app.post("/section/osc_destinations/reorder")
     def reorder_osc_destinations() -> Any:

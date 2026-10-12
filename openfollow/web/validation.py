@@ -15,10 +15,12 @@ from typing import Any
 from openfollow.configuration import (
     _DEFAULT_PSN_MCAST_IP,
     _DEFAULT_PSN_SYSTEM_NAME,
+    DMX_PROTOCOLS,
     MENU_RESERVED_BUTTONS,
     MOUSE3D_AXES,
     MOUSE3D_AXIS_TARGETS,
     MOUSE3D_BUTTON_FIELDS,
+    MOVING_LIGHT_MOUNTINGS,
     RESERVED_MOVEMENT_KEYS,
     VALID_BUTTON_NAMES,
     VALID_CURVES,
@@ -654,6 +656,42 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         ),
         "debounce_ms": FieldRule(_as_int, lo=0, hi=60000, human_error="Debounce must be between 0 and 60000 ms."),
         "hysteresis": FieldRule(_as_float, lo=0.0, hi=10.0, human_error="Hysteresis must be between 0 and 10 m."),
+    },
+    "dmx_output": {
+        "enabled": FieldRule(_as_bool),
+        "protocol": FieldRule(_as_str, choices=DMX_PROTOCOLS, human_error="Protocol must be sACN or Art-Net."),
+        "host": FieldRule(_as_str, max_len=255, custom=_validate_host, human_error="Host must be a hostname or IP."),
+        "fps": FieldRule(_as_int, lo=1, hi=44, human_error="Send rate must be between 1 and 44."),
+        "priority": FieldRule(_as_int, lo=1, hi=200, human_error="Priority must be between 1 and 200."),
+    },
+    "moving_light": {
+        "name": FieldRule(_as_str, max_len=64, human_error="Name must be 0–64 characters."),
+        "enabled": FieldRule(_as_bool),
+        "marker_id": FieldRule(_as_int, lo=0, human_error="Marker must be 0 or more."),
+        "universe": FieldRule(_as_int, lo=0, hi=63999, human_error="Universe must be between 0 and 63999."),
+        "address": FieldRule(_as_int, lo=1, hi=512, human_error="Address must be between 1 and 512."),
+        "pan_channel": FieldRule(_as_int, lo=1, hi=512, human_error="Channel must be between 1 and 512."),
+        "tilt_channel": FieldRule(_as_int, lo=1, hi=512, human_error="Channel must be between 1 and 512."),
+        "fine": FieldRule(_as_bool),
+        "pan_range": FieldRule(_as_float, lo=1.0, hi=720.0, human_error="Pan range must be between 1 and 720 degrees."),
+        "tilt_range": FieldRule(
+            _as_float, lo=1.0, hi=360.0, human_error="Tilt range must be between 1 and 360 degrees."
+        ),
+        "invert_pan": FieldRule(_as_bool),
+        "invert_tilt": FieldRule(_as_bool),
+        "mounting": FieldRule(_as_str, choices=MOVING_LIGHT_MOUNTINGS, human_error="Mounting must be hung or floor."),
+        "pos_x": FieldRule(_as_float, lo=-1000.0, hi=1000.0, human_error="Position must be between -1000 and 1000 m."),
+        "pos_y": FieldRule(_as_float, lo=-1000.0, hi=1000.0, human_error="Position must be between -1000 and 1000 m."),
+        "pos_z": FieldRule(_as_float, lo=-1000.0, hi=1000.0, human_error="Position must be between -1000 and 1000 m."),
+        "heading": FieldRule(
+            _as_float, lo=-360.0, hi=360.0, human_error="Heading must be between -360 and 360 degrees."
+        ),
+        "base_pitch": FieldRule(
+            _as_float, lo=-45.0, hi=45.0, human_error="Base tilt must be between -45 and 45 degrees."
+        ),
+        "base_roll": FieldRule(
+            _as_float, lo=-45.0, hi=45.0, human_error="Base tilt must be between -45 and 45 degrees."
+        ),
     },
     # Shared OSC destination profiles (name + connection).
     "osc_destination": {

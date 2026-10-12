@@ -75,7 +75,7 @@ def _parse_partial(path: Path) -> list[dict[str, str]]:
 # while the filename is plural. Map the filename stem to the rules section so
 # the registered inputs are audited rather than silently skipped on a missing
 # ``FIELD_RULES.get(stem)`` lookup.
-_SECTION_OVERRIDES = {"osc_destinations": "osc_destination"}
+_SECTION_OVERRIDES = {"osc_destinations": "osc_destination", "moving_lights": "moving_light"}
 
 
 def _section_from_path(path: Path) -> str:

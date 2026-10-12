@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 OpenFollow Project
+"""Moving-light output: aims each configured fixture at its marker and sends pan / tilt.
+
+The send thread works out every fixture's pan / tilt from its marker each
+frame and writes them into that fixture's universe. A marker that is missing
+or stale holds the light where it last pointed, since a light has no way to
+say "unknown" and swinging to a default would sweep the stage. Over sACN a
+per-address priority packet claims only the pan / tilt channels, so a
+receiver that merges by priority takes everything else from the desk.
+"""
+
+from __future__ import annotations
+
+import logging
+import socket
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from openfollow.dmx.packets import (
+    ARTNET_MAX_UNIVERSE,
+    ARTNET_PORT,
+    SACN_MAX_UNIVERSE,
+    SACN_MIN_UNIVERSE,
+    SACN_PORT,
+    START_CODE_PRIORITY,
+    UNIVERSE_SIZE,
+    artnet_dmx,
+    new_cid,
+    sacn_multicast_group,
+    sacn_packet,
+)
+from openfollow.psn.marker import is_marker_stale
+from openfollow.scene.pan_tilt import FixturePose, Travel, fractions_for, to_dmx
+
+if TYPE_CHECKING:
+    from openfollow.configuration import DmxOutputConfig, MovingLightConfig
+    from openfollow.psn.marker import Marker
+
+logger = logging.getLogger(__name__)
+
+MarkerLookup = Callable[[int], "Marker | None"]
+# How often sACN per-address priority is repeated, as E1.31 receivers expect about once a second.
+_PRIORITY_INTERVAL_S = 1.0
+_BROADCAST = "255.255.255.255"
+
+
+def fixture_pose(fixture: MovingLightConfig) -> FixturePose:
+    return FixturePose(
+        fixture.pos_x,
+        fixture.pos_y,
+        fixture.pos_z,
+        fixture.heading,
+        fixture.base_pitch,
+        fixture.base_roll,
+        fixture.mounting,
+    )
+
+
+def fixture_travel(fixture: MovingLightConfig) -> Travel:
+    return Travel(fixture.pan_range, fixture.tilt_range, fixture.invert_pan, fixture.invert_tilt)
+
+
+def universe_in_range(protocol: str, universe: int) -> bool:
+    if protocol == "artnet":
+        return 0 <= universe <= ARTNET_MAX_UNIVERSE
+    return SACN_MIN_UNIVERSE <= universe <= SACN_MAX_UNIVERSE
+
+
+@dataclass
+class Frame:
+    """One send's worth of universes: the slot values and which slots this station owns."""
+
+    data: dict[int, bytearray] = field(default_factory=dict)
+    owned: dict[int, bytearray] = field(default_factory=dict)
+
+    def write(self, universe: int, slot: int, values: tuple[int, ...]) -> None:
+        data = self.data.setdefault(universe, bytearray(UNIVERSE_SIZE))
+        owned = self.owned.setdefault(universe, bytearray(UNIVERSE_SIZE))
+        for offset, value in enumerate(values):
+            if 0 <= slot + offset < UNIVERSE_SIZE:
+                data[slot + offset] = value
+                owned[slot + offset] = 1
+
+
+def build_frame(
+    cfg: DmxOutputConfig,
+    markers: MarkerLookup,
+    last: dict[str, tuple[float, float]],
+    aims: dict[str, tuple[float, float]],
+    *,
+    now_us: int | None = None,
+) -> Frame:
+    """Every enabled fixture's pan / tilt, updating ``last`` with what each now points at.
+
+    ``aims`` holds fixtures pointed by hand (while calibrating); they ignore
+    their marker. A fixture whose marker is missing or stale repeats ``last``,
+    and one that has never had a position sends nothing.
+    """
+    frame = Frame()
+    for fixture in cfg.fixtures:
+        if not fixture.enabled or not universe_in_range(cfg.protocol, fixture.universe):
+            continue
+        fractions = aims.get(fixture.id)
+        if fractions is None:
+            marker = markers(fixture.marker_id)
+            previous = last.get(fixture.id)
+            if marker is not None and not is_marker_stale(marker, now_us=now_us):
+                fractions = fractions_for(fixture_pose(fixture), fixture_travel(fixture), marker.pos, previous)
+            if fractions is None:
+                fractions = previous
+        if fractions is None:
+            continue
+        last[fixture.id] = fractions
+        pan_slot, tilt_slot = fixture.channels()
+        frame.write(fixture.universe, pan_slot, to_dmx(fractions[0], fixture.fine))
+        frame.write(fixture.universe, tilt_slot, to_dmx(fractions[1], fixture.fine))
+    return frame
+
+
+class DmxOutputServer:
+    """Sends the moving lights' pan / tilt at ``cfg.fps`` from its own thread."""
+
+    def __init__(
+        self,
+        cfg: DmxOutputConfig,
+        markers: MarkerLookup,
+        *,
+        source_name: str = "OpenFollow",
+        socket_factory: Callable[[], Any] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._cfg = cfg
+        self._markers = markers
+        self._source_name = source_name
+        self._socket_factory = socket_factory or self._open_socket
+        self._clock = clock
+        self._cid = new_cid()
+        self._lock = threading.Lock()
+        self._last: dict[str, tuple[float, float]] = {}
+        self._aims: dict[str, tuple[float, float]] = {}
+        self._sequence: dict[tuple[int, int], int] = {}
+        self._last_priority_s: float | None = None
+        self._sock: Any = None
+        self._thread: threading.Thread | None = None
+        self._stop: threading.Event | None = None
+        self._warned_failure = False
+
+    @staticmethod
+    def _open_socket() -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        return sock
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._sock = self._socket_factory()
+        stop = threading.Event()
+        self._stop = stop
+        self._thread = threading.Thread(target=self._loop, args=(stop,), name="dmx-output", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._stop is not None:
+            self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self._thread = None
+        self._stop = None
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+
+    def restart(self, cfg: DmxOutputConfig) -> None:
+        self.stop()
+        with self._lock:
+            self._cfg = cfg
+            known = {f.id for f in cfg.fixtures}
+            self._last = {k: v for k, v in self._last.items() if k in known}
+            self._aims = {k: v for k, v in self._aims.items() if k in known}
+        self._last_priority_s = None
+        self.start()
+
+    def aim(self, fixture_id: str, fractions: tuple[float, float] | None) -> None:
+        """Point a fixture by hand (pan, tilt fractions), or hand it back to its marker with ``None``."""
+        with self._lock:
+            if fractions is None:
+                self._aims.pop(fixture_id, None)
+            else:
+                self._aims[fixture_id] = (min(max(fractions[0], 0.0), 1.0), min(max(fractions[1], 0.0), 1.0))
+
+    def current(self, fixture_id: str) -> tuple[float, float] | None:
+        """The pan / tilt fractions a fixture last pointed at."""
+        with self._lock:
+            return self._aims.get(fixture_id) or self._last.get(fixture_id)
+
+    def _loop(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            started = self._clock()
+            self.send_once()
+            stop.wait(max(0.0, 1.0 / self._cfg.fps - (self._clock() - started)))
+
+    def send_once(self) -> None:
+        with self._lock:
+            cfg = self._cfg
+            frame = build_frame(cfg, self._markers, self._last, dict(self._aims))
+        now = self._clock()
+        send_priority = cfg.protocol == "sacn" and (
+            self._last_priority_s is None or now - self._last_priority_s >= _PRIORITY_INTERVAL_S
+        )
+        if send_priority:
+            self._last_priority_s = now
+        for universe in sorted(frame.data):
+            if cfg.protocol == "artnet":
+                self._send(
+                    artnet_dmx(universe, bytes(frame.data[universe]), self._next(universe, 0) or 1),
+                    cfg.host or _BROADCAST,
+                    ARTNET_PORT,
+                )
+                continue
+            target = cfg.host or sacn_multicast_group(universe)
+            self._send(self._sacn(cfg, universe, bytes(frame.data[universe]), 0x00), target, SACN_PORT)
+            if send_priority:
+                levels = bytes(cfg.priority if owned else 0 for owned in frame.owned[universe])
+                self._send(self._sacn(cfg, universe, levels, START_CODE_PRIORITY), target, SACN_PORT)
+
+    def _sacn(self, cfg: DmxOutputConfig, universe: int, slots: bytes, start_code: int) -> bytes:
+        return sacn_packet(
+            universe,
+            slots,
+            cid=self._cid,
+            source_name=self._source_name,
+            sequence=self._next(universe, start_code),
+            priority=cfg.priority,
+            start_code=start_code,
+        )
+
+    def _next(self, universe: int, stream: int) -> int:
+        key = (universe, stream)
+        value = (self._sequence.get(key, 0) + 1) % 256
+        self._sequence[key] = value
+        return value
+
+    def _send(self, data: bytes, host: str, port: int) -> None:
+        sock = self._sock
+        if sock is None:
+            return
+        try:
+            sock.sendto(data, (host, port))
+        except OSError as exc:
+            if not self._warned_failure:
+                logger.warning("Moving lights output could not send to %s:%d: %s", host, port, exc)
+                self._warned_failure = True
+            return
+        self._warned_failure = False

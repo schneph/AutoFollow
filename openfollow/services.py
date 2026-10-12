@@ -27,6 +27,7 @@ from openfollow.configuration import (
     HotkeyTrigger,
     viewed_with_controlled,
 )
+from openfollow.dmx import DmxOutputServer
 from openfollow.input import InputManager
 from openfollow.input.mouse3d import idle_mouse3d_status
 from openfollow.net_adapters import display_name
@@ -71,6 +72,7 @@ if TYPE_CHECKING:
     from openfollow.configuration import (
         AppConfig,
         DetectionConfig,
+        DmxOutputConfig,
         OscDestinationsConfig,
         OscTransmittersConfig,
         OtpOutputConfig,
@@ -1688,6 +1690,36 @@ class AppRuntimeServices:
                     self._app._rttrpm_server.register_marker(marker)
         self._app._rttrpm_server.start()
 
+    def init_dmx_output(self) -> None:
+        """Start the moving-lights output when it is switched on."""
+        cfg = self._app._config.dmx_output
+        if not cfg.enabled:
+            return
+        self._app._dmx_server = DmxOutputServer(
+            cfg,
+            self._marker_provider,
+            source_name=self._app._config.psn_system_name,
+        )
+        self._app._dmx_server.start()
+
+    def apply_dmx_output_change(self, new_cfg: DmxOutputConfig) -> None:
+        """Apply a ``dmx_output`` change live: start, restart with the new fixtures, or stop."""
+        server = self._app._dmx_server
+        if server is not None and new_cfg.enabled:
+            server.restart(new_cfg)
+        elif server is not None:
+            server.stop()
+            self._app._dmx_server = None
+        elif new_cfg.enabled:
+            self.init_dmx_output()
+
+    def _aim_moving_light(self, fixture_id: str, fractions: tuple[float, float] | None) -> bool:
+        server = self._app._dmx_server
+        if server is None:
+            return False
+        server.aim(fixture_id, fractions)
+        return True
+
     def init_psn_receiver(self) -> None:
         # Same resolution as ``init_psn`` so input and output land on the same
         # interface, and the same refusal: a configured station interface with
@@ -2805,6 +2837,7 @@ class AppRuntimeServices:
             zone_state_provider=self._get_zone_states_snapshot,
             zone_diagnostics_provider=self._get_zone_diagnostics_snapshot,
             zone_test_send=self._zone_test_send,
+            moving_light_aim=self._aim_moving_light,
             marker_positions_provider=self._get_marker_positions_snapshot,
             # Live per-marker move speeds; the ``dict(...)`` copy is the
             # mutation-isolation boundary so the web thread never holds the live dict.
@@ -4125,6 +4158,8 @@ class AppRuntimeServices:
             self._safe_stop("OTP server", app._otp_server.stop)
         if app._rttrpm_server is not None:
             self._safe_stop("RTTrPM server", app._rttrpm_server.stop)
+        if app._dmx_server is not None:
+            self._safe_stop("moving lights output", app._dmx_server.stop)
         if app._server is not None:
             self._safe_stop("PSN server", app._server.stop)
         if app._psn_receiver is not None:
