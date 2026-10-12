@@ -328,6 +328,7 @@ def _dummy_app(cfg: AppConfig | None = None) -> SimpleNamespace:
         _server=None,
         _otp_server=None,
         _rttrpm_server=None,
+        _dmx_server=None,
         _psn_receiver=None,
         _web_server=None,
         _video_receiver=None,
@@ -1493,6 +1494,12 @@ class TestShutdown:
         assert app._psn_receiver.stopped is True
         assert transmitter.stopped is True
         assert services._osc_transmitter_manager is None
+
+    def test_stops_the_moving_lights_output(self, services: AppRuntimeServices) -> None:
+        stopped: list[bool] = []
+        services._app._dmx_server = SimpleNamespace(stop=lambda: stopped.append(True))
+        services.shutdown()
+        assert stopped == [True]
 
     def test_none_subsystems_are_skipped_cleanly(self, services: AppRuntimeServices) -> None:
         # All subsystems start as None – shutdown must not raise.

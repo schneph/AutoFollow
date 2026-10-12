@@ -101,6 +101,7 @@
     % include('partials/psn.tpl', config=config, saved=False, local_ips=local_ips, psn_source_advisory=psn_source_advisory)
     % include('partials/otp_output.tpl', config=config, saved=False)
     % include('partials/rttrpm_output.tpl', config=config, saved=False)
+    % include('partials/dmx_output.tpl', config=config, saved=False, focus_id='', calibration_marks=calibration_marks if defined('calibration_marks') else [])
     % from openfollow.configuration import (
     %     VALID_OSC_FRAMINGS,
     %     VALID_OSC_TRANSMITTER_PROTOCOLS,

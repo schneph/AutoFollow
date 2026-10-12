@@ -195,6 +195,7 @@ from openfollow.runtime.deb_update import (
 from openfollow.services import AppRuntimeServices, WebCommandQueue
 
 if TYPE_CHECKING:
+    from openfollow.dmx import DmxOutputServer
     from openfollow.input import InputManager
     from openfollow.input.button_detection import ButtonDetectionWizard
     from openfollow.logging_setup import RingBufferLogHandler
@@ -250,6 +251,7 @@ class OpenFollowApp:
         self._server: PsnServer | None = None
         self._otp_server: OtpServer | None = None
         self._rttrpm_server: RttrpmServer | None = None
+        self._dmx_server: DmxOutputServer | None = None
         self._controlled_ids: list[int] = []
         self._viewer_ids: list[int] = []
         self._selected_id: int | None = None
@@ -430,13 +432,14 @@ class OpenFollowApp:
 
         # PSN is foundational: the group below registers markers on it. If PSN
         # failed (``_server`` None), skip them and surface a badge.
-        server_dependent = {"markers", "OTP output", "RTTrPM output", "OSC transmitters"}
+        server_dependent = {"markers", "OTP output", "RTTrPM output", "moving lights output", "OSC transmitters"}
         for init_fn, name in (
             (svc.init_web_server, "web server"),
             (svc.init_psn, "PSN output"),
             (svc.init_markers, "markers"),
             (svc.init_otp, "OTP output"),
             (svc.init_rttrpm, "RTTrPM output"),
+            (svc.init_dmx_output, "moving lights output"),
             (svc.init_osc_transmitters, "OSC transmitters"),
             (svc.init_psn_receiver, "PSN receiver"),
             (svc.init_zone_engine, "zone engine"),

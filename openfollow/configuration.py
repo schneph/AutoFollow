@@ -1120,6 +1120,103 @@ class RttrpmOutputConfig:
         self.source_iface = self.source_iface.strip()
 
 
+DMX_PROTOCOLS = ("sacn", "artnet")
+MOVING_LIGHT_MOUNTINGS = ("hung", "floor")
+_MAX_DMX_UNIVERSE = 63999
+
+
+@dataclass
+class MovingLightConfig:
+    """One moving light aimed at a marker, its pan / tilt channels and where it hangs."""
+
+    id: str = ""
+    name: str = ""
+    enabled: bool = True
+    marker_id: int = 0
+    universe: int = 1
+    # DMX start address, and the pan / tilt channels counted from it (1 = the start address).
+    address: int = 1
+    pan_channel: int = 1
+    tilt_channel: int = 3
+    # 16-bit pan / tilt: each fine channel follows its coarse one.
+    fine: bool = True
+    pan_range: float = 540.0
+    tilt_range: float = 270.0
+    invert_pan: bool = False
+    invert_tilt: bool = False
+    mounting: str = "hung"
+    pos_x: float = 0.0
+    pos_y: float = 0.0
+    pos_z: float = 6.0
+    # Stage bearing of pan zero: 0 = upstage, 90 = stage left.
+    heading: float = 0.0
+    base_pitch: float = 0.0
+    base_roll: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            self.id = _new_uuid_hex()
+        else:
+            self.id = self.id.strip()
+        self.name = _coerce_str(self.name, "").strip()[:64]
+        self.enabled = _coerce_bool(self.enabled, True)
+        self.marker_id = _coerce_int(self.marker_id, 0, lo=0)
+        self.universe = _coerce_int(self.universe, 1, lo=0, hi=_MAX_DMX_UNIVERSE)
+        self.address = _coerce_int(self.address, 1, lo=1, hi=512)
+        self.pan_channel = _coerce_int(self.pan_channel, 1, lo=1, hi=512)
+        self.tilt_channel = _coerce_int(self.tilt_channel, 3, lo=1, hi=512)
+        self.fine = _coerce_bool(self.fine, True)
+        self.pan_range = _coerce_float(self.pan_range, 540.0, lo=1.0, hi=720.0)
+        self.tilt_range = _coerce_float(self.tilt_range, 270.0, lo=1.0, hi=360.0)
+        self.invert_pan = _coerce_bool(self.invert_pan, False)
+        self.invert_tilt = _coerce_bool(self.invert_tilt, False)
+        self.mounting = _coerce_choice(self.mounting, MOVING_LIGHT_MOUNTINGS, "hung")
+        self.pos_x = _coerce_float(self.pos_x, 0.0, lo=-1000.0, hi=1000.0)
+        self.pos_y = _coerce_float(self.pos_y, 0.0, lo=-1000.0, hi=1000.0)
+        self.pos_z = _coerce_float(self.pos_z, 6.0, lo=-1000.0, hi=1000.0)
+        self.heading = _coerce_float(self.heading, 0.0, lo=-360.0, hi=360.0)
+        self.base_pitch = _coerce_float(self.base_pitch, 0.0, lo=-45.0, hi=45.0)
+        self.base_roll = _coerce_float(self.base_roll, 0.0, lo=-45.0, hi=45.0)
+
+    def channels(self) -> tuple[int, int]:
+        """The 0-based universe slots of the pan and tilt coarse channels."""
+        return self.address + self.pan_channel - 2, self.address + self.tilt_channel - 2
+
+
+@dataclass
+class DmxOutputConfig:
+    """Pan / tilt for moving lights, worked out here and sent over sACN or Art-Net."""
+
+    enabled: bool = False
+    protocol: str = "sacn"
+    # Blank: sACN multicast to each universe's group, or Art-Net broadcast.
+    host: str = ""
+    fps: int = 30
+    # sACN priority for the pan / tilt channels; every other channel is left to the desk.
+    priority: int = 150
+    fixtures: list[MovingLightConfig] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.enabled = _coerce_bool(self.enabled, False)
+        self.protocol = _coerce_choice(self.protocol, DMX_PROTOCOLS, "sacn")
+        self.host = _coerce_str(self.host, "").strip()
+        self.fps = _coerce_int(self.fps, 30, lo=1, hi=44)
+        self.priority = _coerce_int(self.priority, 150, lo=1, hi=200)
+        self.fixtures = [
+            MovingLightConfig(**_filter_known(MovingLightConfig, f)) if isinstance(f, dict) else f
+            for f in self.fixtures
+            if isinstance(f, (dict, MovingLightConfig))
+        ]
+        seen: set[str] = set()
+        for fixture in self.fixtures:
+            if fixture.id in seen:
+                fixture.id = _new_uuid_hex()
+            seen.add(fixture.id)
+
+    def fixture(self, fixture_id: str) -> MovingLightConfig | None:
+        return next((f for f in self.fixtures if f.id == fixture_id), None)
+
+
 # ---------------------------------------------------------------------------
 # Flexible OSC transmitter system
 # ---------------------------------------------------------------------------
@@ -2413,6 +2510,7 @@ class AppConfig:
     operator_messages: OperatorMessagesConfig = field(default_factory=OperatorMessagesConfig)
     otp_output: OtpOutputConfig = field(default_factory=OtpOutputConfig)
     rttrpm_output: RttrpmOutputConfig = field(default_factory=RttrpmOutputConfig)
+    dmx_output: DmxOutputConfig = field(default_factory=DmxOutputConfig)
     osc_transmitters: OscTransmittersConfig = field(default_factory=OscTransmittersConfig)
     osc_destinations: OscDestinationsConfig = field(default_factory=OscDestinationsConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
@@ -2552,6 +2650,7 @@ _SUB_CONFIG_MAP: dict[str, type] = {
     "operator_messages": OperatorMessagesConfig,
     "otp_output": OtpOutputConfig,
     "rttrpm_output": RttrpmOutputConfig,
+    "dmx_output": DmxOutputConfig,
     "osc_transmitters": OscTransmittersConfig,
     "osc_destinations": OscDestinationsConfig,
     "detection": DetectionConfig,
@@ -3515,6 +3614,15 @@ def apply_runtime_config_changes(app: OpenFollowApp, new_config: AppConfig) -> b
             ),
         ):
             app._config.rttrpm_output = old_rttrpm_output
+
+    if new_config.dmx_output != app._config.dmx_output:
+        old_dmx_output = app._config.dmx_output
+        app._config.dmx_output = new_config.dmx_output
+        if not _apply(
+            "dmx_output",
+            lambda: app._runtime_services.apply_dmx_output_change(new_config.dmx_output),
+        ):
+            app._config.dmx_output = old_dmx_output
 
     # OSC routing: transmitter rows reference a shared destination set, and the
     # zone engine resolves zone sends against the same set. A transmitter or
