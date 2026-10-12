@@ -130,6 +130,14 @@
                     </div>
                     <div class="row row--pair">
                         <div class="field">
+                            <label>Speed response</label>
+                            <input id="detection-speed-response" type="number" name="speed_response" value="{{det.speed_response}}" min="0" max="10" step="0.1"
+                                   hx-get="/api/validate/detection/speed_response" hx-trigger="blur changed delay:200ms"
+                                   hx-target="#detection-speed-response-error" hx-swap="innerHTML" hx-include="closest form"
+                                   aria-describedby="detection-speed-response-error" aria-invalid="false">
+                            <span id="detection-speed-response-error" class="field-error"></span>
+                        </div>
+                        <div class="field">
                             <label>Grace period (ms)</label>
                             <input id="detection-grace-period-ms" type="number" name="grace_period_ms" value="{{det.grace_period_ms}}" min="0" max="10000" step="100"
                                    hx-get="/api/validate/detection/grace_period_ms" hx-trigger="blur changed delay:200ms"

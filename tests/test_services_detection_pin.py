@@ -29,6 +29,7 @@ from openfollow.runtime.services_detection_pin import (
     _get_pin_state,
     _prune_manual_markers,
     _prune_pin_states,
+    adaptive_alpha,
     apply_detection_pin,
     assist_active,
     cycle_followed_performer,
@@ -2064,3 +2065,101 @@ def test_performer_snapshot_without_a_spotlight_follows_nobody() -> None:
     assert snap["spotlight_marker_id"] is None
     assert snap["followed_marker_id"] is None
     assert [p["followed"] for p in snap["performers"]] == [False, False, False]
+
+
+# ---------------------------------------------------------------------------
+# Speed response (One-Euro adaptive smoothing)
+# ---------------------------------------------------------------------------
+
+
+def _one_euro_alpha(rest_alpha: float, beta: float, speed: float) -> float:
+    """Textbook One-Euro: alpha = 1 / (1 + tau / Te), tau = 1 / (2 pi fc)."""
+    te = NOMINAL_FRAME_DT
+    fc_min = rest_alpha / (1.0 - rest_alpha) / (2.0 * np.pi * te)
+    fc = fc_min + beta * speed
+    return 1.0 / (1.0 + 1.0 / (2.0 * np.pi * fc * te))
+
+
+@pytest.mark.parametrize("speed", [0.0, 0.5, 2.0, 8.0])
+def test_adaptive_alpha_without_speed_response_is_the_smoothing(speed: float) -> None:
+    assert adaptive_alpha(0.15, 0.0, speed) == pytest.approx(0.15)
+
+
+def test_adaptive_alpha_at_rest_is_the_smoothing() -> None:
+    assert adaptive_alpha(0.15, 3.0, 0.0) == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.5, 4.0])
+@pytest.mark.parametrize("beta", [0.5, 2.0, 10.0])
+def test_adaptive_alpha_follows_the_one_euro_cutoff(beta: float, speed: float) -> None:
+    assert adaptive_alpha(0.15, beta, speed) == pytest.approx(_one_euro_alpha(0.15, beta, speed))
+
+
+def test_adaptive_alpha_rises_with_speed_and_stays_below_one() -> None:
+    alphas = [adaptive_alpha(0.15, 2.0, v) for v in (0.0, 0.5, 1.0, 3.0, 10.0, 1000.0)]
+    assert alphas == sorted(alphas)
+    assert len(set(alphas)) == len(alphas)
+    assert alphas[-1] < 1.0
+
+
+def test_adaptive_alpha_with_no_smoothing_stays_instant() -> None:
+    assert adaptive_alpha(1.0, 5.0, 3.0) == pytest.approx(1.0)
+
+
+def _replace_lag(monkeypatch, speed_response: float, step_m: float) -> float:  # noqa: ANN001
+    """Distance the replace-mode marker trails a target moving ``step_m`` per frame."""
+    app = _make_app(detection_cfg=_replace_cfg(smoothing=0.15, speed_response=speed_response))
+    detector = _StubDetector(_StubDetection(0.4, 0.4, 0.6, 0.6))
+    marker = app._server.get_marker(0)
+    frames = 60
+    xs = iter([np.array([[i * step_m, 0.0, 0.0]]) for i in range(frames)])
+
+    import openfollow.runtime.services_detection_pin as module
+
+    monkeypatch.setattr(module, "unproject_to_plane", lambda *_a, **_k: next(xs))
+    for _ in range(frames):
+        _run(app, detector)
+    return (frames - 1) * step_m - marker.pos[0]
+
+
+def test_speed_response_cuts_the_lag_behind_a_fast_performer(monkeypatch) -> None:
+    fixed = _replace_lag(monkeypatch, 0.0, 0.05)  # 3 m/s
+    adaptive = _replace_lag(monkeypatch, 3.0, 0.05)
+    assert adaptive < fixed * 0.5
+
+
+def test_speed_response_leaves_a_still_performer_as_smoothed(monkeypatch) -> None:
+    jitter = [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
+    positions: dict[float, list[float]] = {}
+    for beta in (0.0, 3.0):
+        app = _make_app(detection_cfg=_replace_cfg(smoothing=0.15, speed_response=beta))
+        detector = _StubDetector(_StubDetection(0.4, 0.4, 0.6, 0.6))
+        marker = app._server.get_marker(0)
+        xs = iter([np.array([[x, 0.0, 0.0]]) for x in jitter])
+
+        import openfollow.runtime.services_detection_pin as module
+
+        monkeypatch.setattr(module, "unproject_to_plane", lambda *_a, **_k: next(xs))  # noqa: B023
+        positions[beta] = []
+        for _ in jitter:
+            _run(app, detector)
+            positions[beta].append(marker.pos[0])
+    # Centimetre jitter barely opens the filter: the output stays within a few
+    # millimetres of the fixed filter's.
+    assert positions[3.0] == pytest.approx(positions[0.0], abs=0.003)
+
+
+def test_speed_response_speeds_up_the_assist_glide(monkeypatch) -> None:
+    lags: dict[float, float] = {}
+    for beta in (0.0, 3.0):
+        app = _assist_app(_assist_cfg(assist_radius_m=50.0, smoothing=0.15, speed_response=beta))
+        out = app._server.get_marker(_PID)
+        anchor = get_or_create_manual_marker(app, _PID)
+        detector = _AssistDetector([])
+        for i in range(60):
+            x_frac = 0.1 + i * 0.005  # 0.05 m per frame = 3 m/s in world x
+            detector.detections = [_det(x_frac, 1)]
+            anchor.set_pos(x_frac * 10.0, 0.5, 0.0)  # operator keeps the anchor on them
+            _run_assist(app, detector, monkeypatch)
+        lags[beta] = (0.1 + 59 * 0.005) * 10.0 - out.pos[0]
+    assert lags[3.0] < lags[0.0] * 0.7

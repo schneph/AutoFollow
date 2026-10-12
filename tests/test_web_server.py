@@ -5623,6 +5623,32 @@ def test_update_detection_tracking_saves_reacquire_radius(live_server) -> None:
     assert load_config(server.config_path).detection.reacquire_radius_m == pytest.approx(2.5)
 
 
+def test_update_detection_tracking_saves_speed_response(live_server) -> None:
+    server, base = live_server
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "assist", "speed_response": "2.5"}
+    )
+    assert status == 200
+    assert 'name="speed_response" value="2.5"' in body
+    assert load_config(server.config_path).detection.speed_response == pytest.approx(2.5)
+
+
+@pytest.mark.parametrize(
+    "raw,message",
+    [
+        ("-1", "Speed response must be between 0 and 10."),
+        ("11", "Speed response must be between 0 and 10."),
+        ("fast", "Must be a number."),
+    ],
+)
+def test_validate_endpoint_rejects_bad_speed_response(live_server, raw: str, message: str) -> None:
+    _, base = live_server
+    status, body = _get(base, "/api/validate/detection/speed_response?speed_response=" + raw)
+    assert status == 200
+    assert message in body
+    assert "field-error-msg" in body
+
+
 def _spotlight_server(server: ConfigWebServer, *, followed: int = -1, tracking: tuple[int, ...] = ()) -> None:
     cfg = AppConfig()
     cfg.controlled_marker_ids = [1, 2, 3]

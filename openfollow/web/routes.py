@@ -2988,6 +2988,7 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "max_persons": _as_int,
     "pin_marker_id": _as_int,
     "smoothing": _as_float,
+    "speed_response": _as_float,
     "prediction": _as_float,
     "grace_period_ms": _as_int,
     "pin_mode": _as_str,

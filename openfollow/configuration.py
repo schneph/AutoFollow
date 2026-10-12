@@ -621,6 +621,9 @@ class DetectionConfig:
     pin_marker_id: int = -1
     pin_point: str = "top"
     smoothing: float = 0.15
+    # One-Euro speed coefficient (Hz per m/s): the smoothing cutoff rises with the
+    # marker's speed, so stillness stays steady and fast moves lag less. 0 = fixed.
+    speed_response: float = 0.0
     prediction: float = 8.0
     grace_period_ms: int = 500
     # Hybrid tracking. ``replace`` = original auto-pin (overwrite with the
@@ -669,6 +672,7 @@ class DetectionConfig:
         # ``lo=-1`` admits the "follow selected" sentinel but no other negative.
         self.pin_marker_id = _coerce_int(self.pin_marker_id, -1, lo=-1)
         self.smoothing = _coerce_float(self.smoothing, 0.15, lo=0.0, hi=1.0)
+        self.speed_response = _coerce_float(self.speed_response, 0.0, lo=0.0, hi=10.0)
         # Upper bounds mirror ``openfollow/web/validation.py``.
         self.prediction = _coerce_float(self.prediction, 8.0, lo=0.0, hi=20.0)
         self.grace_period_ms = _coerce_int(self.grace_period_ms, 500, lo=0, hi=10000)

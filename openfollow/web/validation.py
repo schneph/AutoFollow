@@ -607,6 +607,7 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         "max_persons": FieldRule(_as_int, lo=1, hi=50, human_error="Max persons must be between 1 and 50."),
         "pin_marker_id": FieldRule(_as_int, lo=-1, human_error="Marker ID must be -1 (selected) or ≥ 0."),
         "smoothing": FieldRule(_as_float, lo=0.0, hi=1.0, human_error="Smoothing must be between 0 and 1."),
+        "speed_response": FieldRule(_as_float, lo=0.0, hi=10.0, human_error="Speed response must be between 0 and 10."),
         "prediction": FieldRule(_as_float, lo=0.0, hi=20.0, human_error="Prediction must be between 0 and 20."),
         "grace_period_ms": FieldRule(
             _as_int, lo=0, hi=10000, human_error="Grace period must be between 0 and 10000 ms."
