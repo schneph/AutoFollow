@@ -18,7 +18,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from openfollow.configuration import save_config
-from openfollow.runtime.services_detection_pin import cycle_followed_performer
+from openfollow.runtime.services_detection_pin import cycle_followed_performer, follow_performer
 from openfollow.video.failure import SourceKind, VideoFailure, failure_sentence
 
 if TYPE_CHECKING:
@@ -237,6 +237,23 @@ def process_input(app: OpenFollowApp, dt: float) -> None:
         cycle_marker(app, -1)
     if result.clear_messages_pressed:
         app._clear_operator_messages()
+
+
+def apply_follow_commands(app: OpenFollowApp) -> None:
+    """Apply the ``/follow`` commands a desk sent since the last poll, saving once.
+
+    Polled from housekeeping, so a cue applies whatever screen the operator has open.
+    """
+    if app._input_manager is None:
+        return
+    changed = False
+    for command in app._input_manager.flush_follow_commands():
+        if command.step:
+            changed = cycle_followed_performer(app, command.step) or changed
+        else:
+            changed = follow_performer(app, command.marker_id) or changed
+    if changed:
+        _persist_config(app)
 
 
 def _toggle_zone_overlay(app: OpenFollowApp) -> None:

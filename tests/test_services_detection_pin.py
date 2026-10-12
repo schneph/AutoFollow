@@ -33,8 +33,10 @@ from openfollow.runtime.services_detection_pin import (
     assist_active,
     cycle_followed_performer,
     detection_status,
+    follow_performer,
     get_or_create_manual_marker,
     is_assist_controlled,
+    is_tracking_performer,
     performer_snapshot,
 )
 
@@ -2000,6 +2002,47 @@ def test_cycle_with_no_performer_markers_changes_nothing(monkeypatch) -> None:
 def test_cycle_is_not_handled_without_a_spotlight(cfg) -> None:  # noqa: ANN001
     app = _spot_app(**cfg)
     assert not cycle_followed_performer(app, +1)
+
+
+@pytest.mark.parametrize("target", [1, 2])
+def test_follow_points_the_spotlight_at_a_performer_marker(target: int) -> None:
+    app = _spot_app()
+    assert follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == target
+
+
+def test_follow_a_performer_who_is_not_tracked_is_still_accepted() -> None:
+    # A desk may cue the spotlight before the performer walks on.
+    app = _spot_app()
+    assert follow_performer(app, 2)
+    assert not is_tracking_performer(app, 2)
+
+
+@pytest.mark.parametrize("target", [-1, -7])
+def test_follow_a_negative_id_follows_nobody(target: int) -> None:
+    app = _spot_app(followed=1)
+    assert follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == -1
+
+
+@pytest.mark.parametrize("target", [3, 9], ids=["the-spotlight-itself", "not-a-performer"])
+def test_follow_a_marker_outside_the_performer_pool_changes_nothing(target: int) -> None:
+    app = _spot_app(followed=1)
+    assert not follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == 1
+
+
+@pytest.mark.parametrize("followed,target", [(1, 1), (-1, -1)])
+def test_follow_the_current_choice_reports_no_change(followed: int, target: int) -> None:
+    app = _spot_app(followed=followed)
+    assert not follow_performer(app, target)
+
+
+@pytest.mark.parametrize("cfg", [{"spot": -1}, {"pin_mode": "assist"}, {"enabled": False}])
+def test_follow_without_a_spotlight_changes_nothing(cfg) -> None:  # noqa: ANN001
+    app = _spot_app(**cfg)
+    assert not follow_performer(app, 1)
+    assert app._config.detection.followed_marker_id == -1
 
 
 def test_performer_snapshot_names_the_spotlight_and_each_performer(monkeypatch) -> None:

@@ -55,6 +55,9 @@ from openfollow.runtime.app_modes import (
     adjust_move_speed as runtime_adjust_move_speed,
 )
 from openfollow.runtime.app_modes import (
+    apply_follow_commands as runtime_apply_follow_commands,
+)
+from openfollow.runtime.app_modes import (
     cancel_field_choice_picker as runtime_cancel_field_choice_picker,
 )
 from openfollow.runtime.app_modes import (
@@ -534,6 +537,9 @@ class OpenFollowApp:
 
     def _check_marker_speeds_persist(self) -> None:
         runtime_check_marker_speeds_persist(self)
+
+    def _check_follow_commands(self) -> None:
+        runtime_apply_follow_commands(self)
 
     def _check_frame_loop_stall(self) -> None:
         runtime_check_frame_loop_stall(self)

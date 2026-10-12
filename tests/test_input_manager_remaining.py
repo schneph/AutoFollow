@@ -34,6 +34,7 @@ from openfollow.configuration import AppConfig
 from openfollow.input.gamepad import GamepadUpdate
 from openfollow.input.input_manager import InputManager
 from openfollow.operator_messages import OperatorMessageStore
+from openfollow.osc.show_control import FollowCommand
 from openfollow.psn.marker import Marker
 
 pytestmark = pytest.mark.unit
@@ -199,6 +200,19 @@ class _FakeOperatorMessageAdapter:
         self.stopped = True
 
 
+class _FakeOscService:
+    """Subscription table standing in for the shared ``OscService``."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, Any] = {}
+
+    def subscribe(self, pattern: str, handler: Any) -> None:
+        self.handlers[pattern] = handler
+
+    def unsubscribe(self, pattern: str) -> None:
+        self.handlers.pop(pattern, None)
+
+
 class _DummyRuntimeServices:
     """Minimal stand-in for ``AppRuntimeServices`` providing the fields
     ``InputManager`` reads – the shared ``OscService`` and the operator-
@@ -206,7 +220,7 @@ class _DummyRuntimeServices:
     sentinels never reach network code."""
 
     def __init__(self) -> None:
-        self._osc_service = object()  # opaque sentinel
+        self._osc_service = _FakeOscService()
         # Real store: _rebuild_operator_message_handler calls clear_all() on it.
         self._operator_message_store = OperatorMessageStore()
         # Disable the virtual faders integrator for focused input-pipeline tests.
@@ -618,6 +632,47 @@ class TestListenIface:
             manager.restart_osc(enabled=False, port=9001, listen_iface="eth9")
         assert manager.osc_handler is None
         assert caplog.records == []
+
+
+# --------------------------------------------------------------------------- #
+# Show-control (/follow) adapter wiring
+# --------------------------------------------------------------------------- #
+
+
+class TestShowControlWiring:
+    def test_follow_commands_from_the_listener_reach_the_main_loop(self) -> None:
+        app = _DummyApp(osc_enabled=True)
+        manager = InputManager(app)
+        handlers = app._runtime_services._osc_service.handlers
+        handlers["/follow"]("/follow", 3)
+        handlers["/follow/next"]("/follow/next")
+        assert manager.flush_follow_commands() == [FollowCommand(marker_id=3), FollowCommand(step=1)]
+        assert manager.flush_follow_commands() == []
+
+    def test_no_listener_means_no_follow_commands(self) -> None:
+        app = _DummyApp(osc_enabled=False)
+        manager = InputManager(app)
+        assert manager.show_control_handler is None
+        assert app._runtime_services._osc_service.handlers == {}
+        assert manager.flush_follow_commands() == []
+
+    def test_restart_osc_resubscribes_and_disable_unsubscribes(self) -> None:
+        app = _DummyApp(osc_enabled=True)
+        manager = InputManager(app)
+        first = manager.show_control_handler
+        manager.restart_osc(enabled=True, port=9999)
+        assert manager.show_control_handler is not None and manager.show_control_handler is not first
+        assert "/follow" in app._runtime_services._osc_service.handlers
+        manager.restart_osc(enabled=False, port=9999)
+        assert manager.show_control_handler is None
+        assert "/follow" not in app._runtime_services._osc_service.handlers
+
+    def test_stop_unsubscribes(self) -> None:
+        app = _DummyApp(osc_enabled=True)
+        manager = InputManager(app)
+        manager.stop()
+        assert manager.show_control_handler is None
+        assert "/follow" not in app._runtime_services._osc_service.handlers
 
 
 # --------------------------------------------------------------------------- #

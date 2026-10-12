@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from openfollow.configuration import AppConfig
+from openfollow.osc.show_control import FollowCommand
 from openfollow.runtime import app_modes
 
 pytestmark = pytest.mark.unit
@@ -63,6 +64,66 @@ def test_cycle_marker_moves_the_all_performers_spotlight_and_saves_it(monkeypatc
     assert app._config_mtime == 5.0
     # Moving the spotlight leaves the marker selection alone.
     assert app._selected_id == 1
+
+
+class _FollowInput:
+    def __init__(self, *commands: FollowCommand) -> None:
+        self.commands = list(commands)
+
+    def flush_follow_commands(self) -> list[FollowCommand]:
+        commands, self.commands = self.commands, []
+        return commands
+
+
+def _follow_app(monkeypatch, *commands: FollowCommand) -> tuple[SimpleNamespace, list[int]]:  # noqa: ANN001
+    saved: list[int] = []
+    monkeypatch.setattr(app_modes, "save_config", lambda cfg, _path: saved.append(cfg.detection.followed_marker_id))
+    app = _cycle_app(
+        _controlled_ids=[1, 2, 3],
+        _selected_id=1,
+        _server=SimpleNamespace(get_marker=lambda _mid: object()),
+        _detection_pin_states={},
+        _config_path="config.toml",
+        _get_config_mtime=lambda: 5.0,
+        _input_manager=_FollowInput(*commands),
+    )
+    det = app._config.detection
+    det.enabled, det.pin_mode, det.spotlight_marker_id = True, "multi", 3
+    return app, saved
+
+
+def test_desk_follow_commands_apply_in_order_and_save_once(monkeypatch) -> None:  # noqa: ANN001
+    app, saved = _follow_app(monkeypatch, FollowCommand(marker_id=1), FollowCommand(step=1))
+    app_modes.apply_follow_commands(app)
+    assert app._config.detection.followed_marker_id == 2
+    assert saved == [2]
+    assert app._config_mtime == 5.0
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [(), (FollowCommand(marker_id=9),), (FollowCommand(marker_id=-1),)],
+    ids=["nothing-queued", "not-a-performer", "already-nobody"],
+)
+def test_desk_follow_commands_that_change_nothing_do_not_save(monkeypatch, commands) -> None:  # noqa: ANN001
+    app, saved = _follow_app(monkeypatch, *commands)
+    app_modes.apply_follow_commands(app)
+    assert app._config.detection.followed_marker_id == -1
+    assert saved == []
+
+
+def test_desk_follow_commands_without_a_spotlight_are_ignored(monkeypatch) -> None:  # noqa: ANN001
+    app, saved = _follow_app(monkeypatch, FollowCommand(marker_id=1), FollowCommand(step=1))
+    app._config.detection.spotlight_marker_id = -1
+    app_modes.apply_follow_commands(app)
+    assert app._config.detection.followed_marker_id == -1
+    assert saved == []
+
+
+def test_desk_follow_commands_without_input_do_nothing() -> None:
+    app = _cycle_app(_input_manager=None)
+    app_modes.apply_follow_commands(app)
+    assert app._config.detection.followed_marker_id == -1
 
 
 def test_cycle_marker_forward_wraps() -> None:

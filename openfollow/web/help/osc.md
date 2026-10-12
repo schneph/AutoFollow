@@ -20,6 +20,19 @@ The receiver accepts two message shapes:
 
 In both shapes `{id}` is the integer marker ID (1 or higher). Coordinates follow OpenFollow's stage convention: X is stage left (positive) / stage right (negative); Y is upstage (positive) / downstage (negative); Z is height above the stage floor. All values are in **metres**, relative to the **Reference Point**.
 
+## Spotlight cues
+
+With **All Performers** tracking and a **Spotlight marker** set (see Person Detection), a desk can choose whom the spotlight follows, so a lighting cue switches it without anyone touching the station:
+
+```
+/follow  <markerId>   follow that performer marker
+/follow/next          next tracked performer
+/follow/prev          previous tracked performer
+/follow/none          follow nobody
+```
+
+`<markerId>` is an integer, a whole-number float or a numeric string; a negative id is the same as `/follow/none`. An id that is not one of the performer markers, or the spotlight itself, is ignored. A performer who is not on stage yet can still be chosen: the spotlight holds until someone is tracked on that marker. Next and previous step through the performers being tracked, in the same order as the Operator Screen. The choice is saved, exactly as a click on **Follow** is. These cues arrive on the same port, multicast group and sender allowlist as marker positions.
+
 ## Saving
 
 - **Save** – writes the current settings and restarts the OSC receiver if the port or enabled state changed. Changes take effect immediately after saving.

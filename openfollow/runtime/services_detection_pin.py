@@ -630,6 +630,24 @@ def cycle_followed_performer(app: Any, direction: int) -> bool:
     return True
 
 
+def follow_performer(app: Any, marker_id: int) -> bool:
+    """Point the spotlight at performer marker ``marker_id``, or at nobody when negative.
+
+    Returns True when the followed performer changed. A marker outside the
+    performer pool, or no spotlight set up, changes nothing.
+    """
+    if spotlight_marker_id(app) is None:
+        return False
+    if marker_id >= 0 and marker_id not in performer_marker_ids(app):
+        return False
+    target = max(marker_id, -1)
+    det = app._config.detection
+    if det.followed_marker_id == target:
+        return False
+    det.followed_marker_id = target
+    return True
+
+
 def _drive_spotlight(app: Any, spot_id: int, pool: list[int], steps: float) -> None:
     """Mirror the followed performer's marker onto the spotlight marker.
 

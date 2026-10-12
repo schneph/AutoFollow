@@ -27,6 +27,7 @@ from openfollow.logging_setup import ThrottledExceptionLogger
 from openfollow.net_utils import plane_source_iface
 from openfollow.osc.input import OscMarkerAdapter
 from openfollow.osc.operator_message import OperatorMessageOscAdapter
+from openfollow.osc.show_control import FollowCommand, ShowControlOscAdapter
 from openfollow.runtime.services_detection_pin import (
     get_or_create_manual_marker,
     is_assist_controlled,
@@ -178,6 +179,9 @@ class InputManager:
         # gated on ``osc_handler is not None`` and ``[operator_messages] enabled``.
         self.operator_message_handler: OperatorMessageOscAdapter | None = None
         self._rebuild_operator_message_handler()
+        # Show control (``/follow``) shares that listener too.
+        self.show_control_handler: ShowControlOscAdapter | None = None
+        self._rebuild_show_control_handler()
 
     def _get_marker(self, marker_id: int) -> Marker | None:
         """Resolve the marker operator input should steer.
@@ -639,8 +643,9 @@ class InputManager:
         The operator-message adapter is torn down and rebuilt alongside the
         marker adapter, since it subscribes on that listener.
         """
-        # Drop the operator-message adapter before tearing the listener down.
+        # Drop the adapters sharing the listener before tearing it down.
         self._stop_operator_message_handler()
+        self._stop_show_control_handler()
         if self.osc_handler is not None:
             self.osc_handler.stop()
             self.osc_handler = None
@@ -666,6 +671,7 @@ class InputManager:
                 )
                 self.osc_handler = None
         self._rebuild_operator_message_handler()
+        self._rebuild_show_control_handler()
 
     def restart_mouse3d(self, config: Mouse3DConfig) -> None:
         """Live-apply a 3D Mouse config change.
@@ -714,6 +720,25 @@ class InputManager:
             self.operator_message_handler.stop()
             self.operator_message_handler = None
 
+    def _rebuild_show_control_handler(self) -> None:
+        """Start the ``/follow`` adapter whenever the OSC listener is up."""
+        self._stop_show_control_handler()
+        if self.osc_handler is None:
+            return
+        self.show_control_handler = ShowControlOscAdapter(self.app._runtime_services._osc_service)
+        self.show_control_handler.start()
+
+    def _stop_show_control_handler(self) -> None:
+        if self.show_control_handler is not None:
+            self.show_control_handler.stop()
+            self.show_control_handler = None
+
+    def flush_follow_commands(self) -> list[FollowCommand]:
+        """Queued ``/follow`` commands since the last call, oldest first."""
+        if self.show_control_handler is None:
+            return []
+        return self.show_control_handler.flush()
+
     def stop(self) -> None:
         """Stop input subsystems and release resources."""
         self.gamepad_handler.stop()
@@ -721,5 +746,6 @@ class InputManager:
         # The live-disable path (restart_mouse3d) uses the non-blocking default.
         self.mouse3d_manager.stop(wait=True)
         self._stop_operator_message_handler()
+        self._stop_show_control_handler()
         if self.osc_handler is not None:
             self.osc_handler.stop()
