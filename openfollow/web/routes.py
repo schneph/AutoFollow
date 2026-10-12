@@ -9040,6 +9040,18 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
 
     # -- Trigger zone CRUD API ----------------------------------------
 
+    @app.get("/api/zones/preset/magicq")
+    def api_zone_preset_magicq() -> Any:
+        """Zone addresses that go a MagicQ playback on first entry and release it on final exit."""
+        from openfollow.osc.desk_presets import PresetError, magicq_zone_cues
+
+        response.content_type = "application/json"
+        try:
+            return json.dumps(magicq_zone_cues(request.query.get("playback", ""), request.query.get("cue", "")))
+        except PresetError as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+
     @app.get("/api/zones")
     def api_list_zones() -> Any:
         """Return zones + live occupancy + marker positions for the editor."""

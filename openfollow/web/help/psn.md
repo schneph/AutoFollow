@@ -23,3 +23,10 @@ Every tracker in the data packet carries a **status**, PSN's validity for that p
 - **Stale** – `0.0` whenever this station has not updated the marker for one second, whatever it would otherwise carry, so a frozen station never advertises a valid position.
 
 Each tracker also carries a **timestamp** that stops advancing when the marker stops being updated. grandMA3 colours a tracker by packet arrival rather than by status; a receiver that does read validity gets the signal above.
+
+## ChamSys MagicQ
+
+MagicQ takes tracker positions over PSN (and over OTP, see **OTP Output**), so the stream from this page needs no extra setup on this station. On the desk, add a PSN tracker source on the same network as this station and assign each marker's tracker ID to the fixtures that should follow it; a marker's ID here is its PSN tracker ID. If MagicQ already receives another PSN source on `236.10.10.10`, change **PSN Multicast IP** here or there so the two do not mix.
+
+To fire MagicQ playbacks when performers walk into a trigger zone, see **MagicQ Playback** in the **Zone Editor** help.
+
