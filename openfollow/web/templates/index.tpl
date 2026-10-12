@@ -61,6 +61,7 @@
 <div class="tab-content" id="tab-camera-grid">
     <div class="wizard-launch">
         <a href="/wizard" class="btn-link save-btn">Open Setup Wizard</a>
+        <a href="/calibration-check" class="btn-link btn-secondary">Check Calibration</a>
         <span class="section-note">Guided camera positioning and grid calibration</span>
     </div>
     % include('partials/video_source.tpl', config=config, saved=False, available_inputs=available_inputs, input_html_fragments=input_html_fragments, video_failure=video_failure, video_failure_text=video_failure_text, video_error_message=video_error_message, video_failure_action=video_failure_action)

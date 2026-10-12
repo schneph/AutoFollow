@@ -4,6 +4,8 @@ Where the real camera sits in the venue and which lens it uses. OpenFollow uses 
 
 The easiest way to set them is the **Setup Wizard** (the Open Setup Wizard button on the Camera & Grid tab), which solves position, orientation, and field of view from four marked grid corners. The fields here are for direct edits and fine-tuning.
 
+**Check Calibration**, beside it, draws the wizard's floor marks over the live video so you can drag each onto its tape mark and read how far off the saved calibration is, in centimetres, before a show.
+
 Positions are in **metres**, relative to the **Reference Point** – the single physical point on stage that is the (0, 0, 0) of your show (see Core Concepts). Orientation is in **degrees**.
 
 ## Position (X, Y, Z)

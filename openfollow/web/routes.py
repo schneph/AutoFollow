@@ -116,7 +116,7 @@ from openfollow.templates.writer import (
     delete_user_template,
     write_user_template,
 )
-from openfollow.units import UnitSystem, parse_length, parse_speed
+from openfollow.units import UnitSystem, format_small_length, parse_length, parse_speed
 from openfollow.web import diagnostics, peer_auth
 from openfollow.web._md import render_help_markdown
 from openfollow.web.bindings import check_binding, osc_row_overlap, osc_trigger_overlap
@@ -3334,6 +3334,11 @@ def _load_json_body() -> Any:
 # unproject / solve endpoints), so the corner-pinning overlay bows to match a
 # fisheye snapshot and the solve undistorts the pinned corners first.
 _WIZARD_CAMERA_FIELDS = ("pos_x", "pos_y", "pos_z", "pitch", "yaw", "roll", "fov")
+
+
+def _error_text(error_m: float | None, units: UnitSystem) -> str:
+    """A calibration-check distance, or why there is none."""
+    return "Off the stage plane" if error_m is None else format_small_length(error_m, units)
 
 
 def _wizard_lens_coeffs(cam: Any) -> tuple[float, float]:
@@ -9331,6 +9336,86 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
         # while the operator is still in the Setup Wizard.
         return template(
             "wizard", config=config, **input_data, **_page_update_context(server), **_page_host_context(config)
+        )
+
+    @app.get("/calibration-check")
+    def calibration_check_page() -> Any:
+        """Check the saved calibration against the stage's floor marks."""
+        config = _request_scoped_config()
+        return template(
+            "calibration_check", config=config, **_page_update_context(server), **_page_host_context(config)
+        )
+
+    @app.get("/api/calibration/marks")
+    def api_calibration_marks() -> Any:
+        """Where the saved calibration draws each floor mark on the snapshot."""
+        from openfollow.scene.calibration_check import project_marks
+
+        response.content_type = "application/json"
+        try:
+            img_w = float(request.query.get("image_width", ""))
+            img_h = float(request.query.get("image_height", ""))
+            _require_wizard_canvas(img_w, img_h)
+        except ValueError as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+        config = _request_scoped_config()
+        marks = project_marks(config.camera, config.grid, img_w, img_h)
+        return json.dumps({"marks": {name: (list(pt) if pt else None) for name, pt in marks.items()}})
+
+    @app.post("/api/calibration/check")
+    def api_calibration_check() -> Any:
+        """Error of each placed floor mark against the saved calibration."""
+        from openfollow.scene.calibration_check import MARK_NAMES, error_level, measure_marks
+
+        response.content_type = "application/json"
+        data = _load_json_body()
+        if data is None:
+            return json.dumps({"error": "Invalid JSON"})
+        try:
+            if not isinstance(data, dict):
+                raise TypeError("Expected a JSON object")
+            img_w = float(data["image_width"])
+            img_h = float(data["image_height"])
+            _require_wizard_canvas(img_w, img_h)
+            raw = data["marks"]
+            if not isinstance(raw, dict):
+                raise TypeError("marks must be an object")
+            placed: dict[str, tuple[float, float]] = {}
+            for name, pt in raw.items():
+                if name not in MARK_NAMES:
+                    raise ValueError(f"unknown mark {name!r}")
+                if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                    raise ValueError("each mark must be [x, y]")
+                x, y = float(pt[0]), float(pt[1])
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    raise ValueError("mark coords must be finite numbers")
+                placed[name] = (x, y)
+        except (KeyError, TypeError, ValueError) as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+
+        config = _request_scoped_config()
+        units = UnitSystem(config.ui.unit_system)
+        results = measure_marks(config.camera, config.grid, placed, img_w, img_h)
+        # The worst mark sets the verdict; one that misses the stage plane is worst of all.
+        measured = [r.error_m for r in results if r.error_m is not None]
+        worst = max(measured) if measured and len(measured) == len(results) else None
+        return json.dumps(
+            {
+                "marks": [
+                    {
+                        "name": r.name,
+                        "error_m": r.error_m,
+                        "error_text": _error_text(r.error_m, units),
+                        "level": r.level,
+                    }
+                    for r in results
+                ],
+                "worst_m": worst,
+                "worst_text": _error_text(worst, units) if results else "",
+                "level": error_level(worst) if results else "ok",
+            }
         )
 
     @app.get("/api/video/snapshot/full")
