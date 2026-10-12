@@ -2994,6 +2994,7 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "reacquire_radius_m": _as_float,
     "spotlight_marker_id": _as_int,
     "followed_marker_id": _as_int,
+    "rehearsal_performers": _as_int,
 }
 
 

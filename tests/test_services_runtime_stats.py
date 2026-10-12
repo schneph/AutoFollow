@@ -563,6 +563,7 @@ class TestPublishRuntimeStats:
         assert tracking["pinned_track_id"] == 42
         assert tracking["missing_deps"] == []
         assert tracking["pin_status"] is None  # the pin has written nothing yet
+        assert tracking["rehearsal_performers"] == 0
 
     def test_pin_status_mirrors_what_the_detection_pin_wrote(
         self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch

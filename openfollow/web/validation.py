@@ -622,6 +622,9 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
             _as_float, lo=0.0, hi=50.0, human_error="Re-acquire radius must be between 0 and 50 m."
         ),
         "spotlight_marker_id": FieldRule(_as_int, lo=-1, human_error="Spotlight marker must be -1 (off) or ≥ 0."),
+        "rehearsal_performers": FieldRule(
+            _as_int, lo=0, hi=6, human_error="Rehearsal performers must be between 0 (off) and 6."
+        ),
     },
     "video_source": {
         # ``video_source_type`` is the only field common to every plugin.

@@ -1196,6 +1196,11 @@ def test_validate_reacquire_radius_range(raw: str, ok: bool) -> None:
     assert (validate("detection", "reacquire_radius_m", raw) is None) is ok
 
 
+@pytest.mark.parametrize(("raw", "ok"), [("0", True), ("6", True), ("7", False), ("-1", False), ("two", False)])
+def test_validate_rehearsal_performers(raw: str, ok: bool) -> None:
+    assert (validate("detection", "rehearsal_performers", raw) is None) is ok
+
+
 @pytest.mark.parametrize(("raw", "ok"), [("-1", True), ("0", True), ("12", True), ("-2", False), ("lead", False)])
 def test_validate_spotlight_marker_id(raw: str, ok: bool) -> None:
     assert (validate("detection", "spotlight_marker_id", raw) is None) is ok

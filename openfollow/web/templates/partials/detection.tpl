@@ -142,6 +142,23 @@
             </details>
         </div>
 
+        <div class="group">
+            <h3 class="group-title">Rehearsal</h3>
+% if det.enabled and det.rehearsal_performers > 0:
+            <div class="notice warning" role="status">Rehearsal is on: every output follows simulated performers, not the stage.</div>
+% end
+            <div class="row row--pair">
+                <div class="field">
+                    <label for="detection-rehearsal-performers">Rehearsal performers</label>
+                    <input id="detection-rehearsal-performers" type="number" name="rehearsal_performers" value="{{det.rehearsal_performers}}" min="0" max="6" step="1"
+                           hx-get="/api/validate/detection/rehearsal_performers" hx-trigger="blur changed delay:200ms"
+                           hx-target="#detection-rehearsal-performers-error" hx-swap="innerHTML" hx-include="closest form"
+                           aria-describedby="detection-rehearsal-performers-error" aria-invalid="false">
+                    <span id="detection-rehearsal-performers-error" class="field-error"></span>
+                </div>
+            </div>
+        </div>
+
         <div class="group group--assist" data-assist-only {{'' if tracking_state == 'assist' else 'hidden'}}>
             <h3 class="group-title">Assisted Tracking</h3>
             <div class="row row--pair">
