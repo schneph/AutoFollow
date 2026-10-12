@@ -5662,6 +5662,22 @@ def _spotlight_server(server: ConfigWebServer, *, followed: int = -1, tracking: 
     server._runtime_stats_provider = lambda: {"tracking": {"all_performers": {"performers": performers}}}
 
 
+def test_update_detection_tracking_saves_rehearsal_performers(live_server) -> None:
+    server, base = live_server
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "multi", "rehearsal_performers": "3"}
+    )
+    assert status == 200
+    assert load_config(server.config_path).detection.rehearsal_performers == 3
+    assert "Rehearsal is on" in body
+
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "off", "rehearsal_performers": "3"}
+    )
+    assert status == 200
+    assert "Rehearsal is on" not in body
+
+
 def test_update_detection_tracking_saves_the_spotlight_marker(live_server) -> None:
     server, base = live_server
     status, _ = _post_form(base, "/section/detection/tracking", {"tracking_state": "multi", "spotlight_marker_id": "2"})

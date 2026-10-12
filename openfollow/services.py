@@ -42,6 +42,7 @@ from openfollow.rttrpm import RttrpmServer
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT
 from openfollow.runtime.network_observer import DOWN_POLLS_BEFORE_SUSPEND, NetworkPlaneObserver, Plane
 from openfollow.runtime.overlay_state import OverlayState
+from openfollow.runtime.rehearsal import RehearsalPerformers
 from openfollow.runtime.services_detection_pin import (
     apply_detection_pin as apply_detection_pin_helper,
 )
@@ -709,6 +710,7 @@ class AppRuntimeServices:
         self._overlay_renderer: CairoOverlayRenderer | None = None  # set in init_video
         self._system_stats: SystemStatsCollector | None = None  # set in init_video
         self._person_detector: PersonDetector | None = None  # set in init_video if enabled
+        self._rehearsal = RehearsalPerformers()
 
         # Object pool for OverlayState to reduce GC pressure.
         self._overlay_state_pool = OverlayStatePool(pool_size=3)
@@ -3504,7 +3506,7 @@ class AppRuntimeServices:
             self._app,
             overlay_state_pool=self._overlay_state_pool,
             system_stats=self._system_stats,
-            person_detector=self._person_detector,
+            person_detector=self._tracking_source(),
             cam_params_buffer=self._cam_params_buffer,
             dt=dt,
             network_alerts=self.network_alerts(),
@@ -3530,13 +3532,28 @@ class AppRuntimeServices:
         ``dt`` (seconds since the previous animate frame) keeps the smoothing /
         prediction frame-rate-independent.
         """
+        count = self._rehearsal_count()
+        if count:
+            self._rehearsal.update(self._app, count)
+        self._status_flags["rehearsal"] = (
+            ("caution", f"Rehearsal: {count} simulated performer{'s' if count != 1 else ''}") if count else None
+        )
         apply_detection_pin_helper(
             self._app,
-            person_detector=self._person_detector,
+            person_detector=self._tracking_source(),
             unproject_cam_buffer=self._unproject_cam_buffer,
             screen_point_buffer=self._screen_point_buffer,
             dt=dt,
         )
+
+    def _rehearsal_count(self) -> int:
+        """Simulated performers standing in for detections; 0 unless detection is on."""
+        det = self._app._config.detection
+        return int(det.rehearsal_performers) if det.enabled else 0
+
+    def _tracking_source(self) -> Any:
+        """What tracking reads people from: the rehearsal performers while they are on, else the detector."""
+        return self._rehearsal if self._rehearsal_count() else self._person_detector
 
     def init_zone_engine(self) -> None:
         """Create the zone engine from config, wired to the shared OSC service."""
@@ -3604,7 +3621,7 @@ class AppRuntimeServices:
     def _collect_detection_positions(self) -> list[tuple[tuple[str, int], float, float]]:
         """World-XY foot positions of every visible AI detection."""
         app = self._app
-        detector = self._person_detector
+        detector = self._tracking_source()
         if detector is None:
             return []
         detections = detector.detections
@@ -4050,6 +4067,7 @@ class AppRuntimeServices:
         if self._person_detector is not None:
             detection_snapshot = dict(self._person_detector.performance_stats)
         detection_snapshot["pin_status"] = self._detection_pin_status()
+        detection_snapshot["rehearsal_performers"] = self._rehearsal_count()
         detection_snapshot["all_performers"] = (
             performer_snapshot(self._app) if cfg.detection.enabled and cfg.detection.pin_mode == "multi" else None
         )

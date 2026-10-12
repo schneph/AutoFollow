@@ -399,6 +399,24 @@ class TestCollectDetectionPositions:
         out = services._collect_detection_positions()
         assert out == [(("detection", 3), 2.0, 3.0)]
 
+    def test_rehearsal_performers_feed_the_zones_in_place_of_the_detector(
+        self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        services._person_detector = _FakeDetector([_FakeDet(0.4, 0.5, 0.6, 0.7, track_id=3)])
+        services._rehearsal.detections = [_FakeDet(0.1, 0.2, 0.3, 0.4, track_id=500)]  # type: ignore[list-item]
+        services._app._config.detection.enabled = True
+        services._app._config.detection.rehearsal_performers = 1
+        services._app._video_receiver = _FakeReceiver()
+
+        from openfollow.scene import solver as solver_mod
+
+        monkeypatch.setattr(
+            solver_mod,
+            "unproject_to_plane",
+            lambda *a, **kw: np.array([[2.0, 3.0]], dtype=np.float64),
+        )
+        assert services._collect_detection_positions() == [(("detection", 500), 2.0, 3.0)]
+
     def test_untracked_detection_collapses_to_neg_one(
         self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch
     ) -> None:

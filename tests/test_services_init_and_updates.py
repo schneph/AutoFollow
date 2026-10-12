@@ -1311,6 +1311,41 @@ class TestUpdateDelegators:
         assert kwargs["screen_point_buffer"] is services._screen_point_buffer
         assert kwargs["dt"] == 0.5
 
+    @pytest.mark.parametrize(("enabled", "count", "rehearsal"), [(True, 2, True), (True, 0, False), (False, 2, False)])
+    def test_rehearsal_performers_stand_in_for_the_detector_while_on(
+        self,
+        services: AppRuntimeServices,
+        monkeypatch: pytest.MonkeyPatch,
+        enabled: bool,
+        count: int,
+        rehearsal: bool,
+    ) -> None:
+        calls: list[dict[str, Any]] = []
+        updates: list[int] = []
+        monkeypatch.setattr(services_module, "apply_detection_pin_helper", lambda app, **kw: calls.append(kw))
+        monkeypatch.setattr(services._rehearsal, "update", lambda app, n: updates.append(n))
+        services._person_detector = object()  # type: ignore[assignment]
+        services._app._config.detection.enabled = enabled
+        services._app._config.detection.rehearsal_performers = count
+
+        services.apply_detection_pin()
+
+        expected = services._rehearsal if rehearsal else services._person_detector
+        assert calls[0]["person_detector"] is expected
+        assert services._tracking_source() is expected
+        assert updates == ([count] if rehearsal else [])
+        flag = services._status_flags["rehearsal"]
+        assert flag == (("caution", "Rehearsal: 2 simulated performers") if rehearsal else None)
+
+    def test_one_rehearsal_performer_is_named_in_the_singular(
+        self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(services_module, "apply_detection_pin_helper", lambda app, **kw: None)
+        services._app._config.detection.enabled = True
+        services._app._config.detection.rehearsal_performers = 1
+        services.apply_detection_pin()
+        assert services._status_flags["rehearsal"] == ("caution", "Rehearsal: 1 simulated performer")
+
     # Note: ``update_controller_status`` and ``services_controller_status``
     # were removed when the binding moved to the marker cards.
 

@@ -3089,6 +3089,7 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "followed2_marker_id": _as_int,
     "spotlight3_marker_id": _as_int,
     "followed3_marker_id": _as_int,
+    "rehearsal_performers": _as_int,
 }
 
 

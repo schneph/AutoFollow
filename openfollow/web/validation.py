@@ -638,6 +638,9 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         "spotlight_marker_id": FieldRule(_as_int, lo=-1, human_error="Spotlight marker must be -1 (off) or ≥ 0."),
         "spotlight2_marker_id": FieldRule(_as_int, lo=-1, human_error="Spotlight marker must be -1 (off) or ≥ 0."),
         "spotlight3_marker_id": FieldRule(_as_int, lo=-1, human_error="Spotlight marker must be -1 (off) or ≥ 0."),
+        "rehearsal_performers": FieldRule(
+            _as_int, lo=0, hi=6, human_error="Rehearsal performers must be between 0 (off) and 6."
+        ),
     },
     "video_source": {
         # ``video_source_type`` is the only field common to every plugin.

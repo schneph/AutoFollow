@@ -48,6 +48,12 @@ Under every mode the detector runs a **tracking-by-detection** pipeline: each de
 
 **Smoothing**, **Speed response**, **Prediction**, and **Grace period** live under **Advanced motion** in the Tracking box; **Follow marker** (Fully Automatic only) and **Track** stay visible.
 
+### Rehearsal
+
+**Rehearsal performers** (0 to 6, 0 = off) puts simulated people on stage so you can test the desk, the zones and every output with nobody in front of the camera. Each one walks a slow looping path inside the grid and steps off stage for a few seconds every half minute, coming back as a new person, the way a real performer would after leaving. They are drawn as detection boxes on the Operator Screen and take markers exactly as real people would under the current tracking mode, including the spotlights and entry zones. While they are on, the real camera's detections are ignored, the Operator Screen shows a **Rehearsal** caution, and this box says so too.
+
+They need tracking switched on and a video picture to project into: the Media Gallery's default Stage picture works when no camera is connected. Set it back to 0 before the show.
+
 ## Detection Model
 
 Detection quality is a simple choice of tier, from fastest to most accurate. Higher tiers detect people more reliably (especially small, distant, or silhouetted subjects under stage lighting) but need more compute.

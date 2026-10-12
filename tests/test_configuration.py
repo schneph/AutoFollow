@@ -3261,6 +3261,14 @@ def test_detection_config_clamps_speed_response(raw: object, expected: float) ->
     assert cfg.speed_response == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(0, 0), (3, 3), ("6", 6), (9, 6), (-2, 0), ("many", 0), (None, 0), (True, 0)],
+)
+def test_detection_config_coerces_rehearsal_performers(raw: object, expected: int) -> None:
+    assert DetectionConfig(rehearsal_performers=raw).rehearsal_performers == expected  # type: ignore[arg-type]
+
+
 def test_detection_config_spotlight_defaults_off() -> None:
     cfg = DetectionConfig()
     assert (cfg.spotlight_marker_id, cfg.followed_marker_id) == (-1, -1)

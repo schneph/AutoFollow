@@ -688,6 +688,9 @@ class DetectionConfig:
     followed2_marker_id: int = -1
     spotlight3_marker_id: int = -1
     followed3_marker_id: int = -1
+    # Simulated performers walking the stage in place of detections, for testing
+    # outputs with nobody on stage; 0 = off.
+    rehearsal_performers: int = 0
     # Master on/off for region-of-interest masking. When False (default) the
     # masks below are inactive and detection runs over the whole frame even if
     # masks are drawn; True confines detection to the union of enabled masks.
@@ -730,6 +733,7 @@ class DetectionConfig:
         for number in range(2, SPOTLIGHT_COUNT + 1):
             for name in (spotlight_field(number), followed_field(number)):
                 setattr(self, name, _coerce_int(getattr(self, name), -1, lo=-1))
+        self.rehearsal_performers = _coerce_int(self.rehearsal_performers, 0, lo=0, hi=6)
         self.masks_enabled = _coerce_bool(self.masks_enabled, False)
         # Convert dict entries (hand-edited TOML / imported config) to
         # dataclasses and drop non-object entries, so the detector thread can
