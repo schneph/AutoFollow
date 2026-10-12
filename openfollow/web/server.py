@@ -839,6 +839,14 @@ class ConfigWebServer:
         """Queue a controller-slot action (``identify`` / ``forget``) for the main loop."""
         self._command_queue.request_slot_action(action, index, ref)
 
+    def request_freeze(self, frozen: bool | None) -> None:
+        """Queue a freeze (True), release (False) or toggle (None) of every output."""
+        self._command_queue.request_freeze(frozen)
+
+    def outputs_frozen(self) -> bool:
+        """Whether the outputs were frozen at the main loop's last poll."""
+        return self._command_queue.outputs_frozen()
+
     def whats_new_pending(self) -> bool:
         """True when the page should open the updater's What's new step."""
         return self._command_queue.whats_new_pending()

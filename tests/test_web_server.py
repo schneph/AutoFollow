@@ -8081,3 +8081,44 @@ def test_vlan_subinterface_is_offered_as_a_plane_pin(live_server, monkeypatch) -
     assert status == 200
     assert 'value="eth0.10"' in body
     assert "eth0.10 – 10.20.0.5" in body
+
+
+# --------------------------------------------------------------------------- #
+# Freeze outputs
+# --------------------------------------------------------------------------- #
+
+
+def test_the_overview_page_offers_the_freeze_control(live_server) -> None:
+    _, base = live_server
+    status, body = _get(base, "/")
+    assert status == 200
+    assert 'id="output-freeze"' in body
+    assert 'hx-post="/section/output_freeze/freeze"' in body
+
+
+@pytest.mark.parametrize("frozen", [True, False])
+def test_the_freeze_control_shows_the_main_loops_state(live_server, frozen: bool) -> None:
+    server, base = live_server
+    server._command_queue.publish_outputs_frozen(frozen)
+    status, body = _get(base, "/section/output_freeze")
+    assert status == 200
+    assert ("Outputs frozen" in body) is frozen
+    assert ('hx-post="/section/output_freeze/release"' in body) is frozen
+    assert ('hx-post="/section/output_freeze/freeze"' in body) is not frozen
+    assert 'hx-trigger="every 1s"' in body
+
+
+@pytest.mark.parametrize(("action", "frozen"), [("freeze", True), ("release", False)])
+def test_freeze_and_release_are_queued_for_the_main_loop(live_server, action: str, frozen: bool) -> None:
+    server, base = live_server
+    status, body = _post_form(base, f"/section/output_freeze/{action}", {})
+    assert status == 200
+    assert ("Outputs frozen" in body) is frozen
+    assert server._command_queue.consume_freeze_requests() == [frozen]
+
+
+def test_anything_else_is_not_a_freeze_action(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(base, "/section/output_freeze/toggle", {})
+    assert status == 404
+    assert server._command_queue.consume_freeze_requests() == []

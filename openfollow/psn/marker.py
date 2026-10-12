@@ -84,6 +84,7 @@ class Marker:
         "_timestamp",
         "_remote",
         "_clock",
+        "_held",
         "_lock",
     )
 
@@ -113,6 +114,7 @@ class Marker:
         self._timestamp: int = 0
         self._remote: bool = bool(remote)
         self._clock = clock
+        self._held = False
         self._lock = threading.Lock()
 
     @property
@@ -151,6 +153,17 @@ class Marker:
             return self._timestamp
 
     @property
+    def held(self) -> bool:
+        """True while :meth:`hold` keeps this marker where it is."""
+        with self._lock:
+            return self._held
+
+    def hold(self, held: bool) -> None:
+        """Keep the position and status as they are now (True), or let writes move them again."""
+        with self._lock:
+            self._held = bool(held)
+
+    @property
     def is_remote(self) -> bool:
         """True when this marker mirrors a sender on the network."""
         return self._remote
@@ -168,8 +181,10 @@ class Marker:
         """
         value = None if status is None else _clamped_status(status)
         with self._lock:
-            self._pos = (x, y, z)
             self._stamp_locked()
+            if self._held:
+                return
+            self._pos = (x, y, z)
             if value is not None:
                 self._status = value
 
@@ -188,7 +203,8 @@ class Marker:
         """Set the tracker validity, clamped to the 0.0-1.0 range."""
         value = _clamped_status(status)
         with self._lock:
-            self._status = value
+            if not self._held:
+                self._status = value
 
     def apply_remote(
         self,

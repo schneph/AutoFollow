@@ -195,6 +195,9 @@ from openfollow.runtime.deb_update import (
 from openfollow.runtime.deb_update import (
     run_local_update as runtime_run_local_update,
 )
+from openfollow.runtime.output_freeze import (
+    check_output_freeze as runtime_check_output_freeze,
+)
 from openfollow.services import AppRuntimeServices, WebCommandQueue
 
 if TYPE_CHECKING:
@@ -254,6 +257,8 @@ class OpenFollowApp:
         self._otp_server: OtpServer | None = None
         self._rttrpm_server: RttrpmServer | None = None
         self._controlled_ids: list[int] = []
+        # Every controlled marker held where it is (see runtime.output_freeze).
+        self._outputs_frozen = False
         self._viewer_ids: list[int] = []
         self._selected_id: int | None = None
         # Assist-mode manual anchor markers, keyed by the pinned marker id.
@@ -540,6 +545,9 @@ class OpenFollowApp:
 
     def _check_follow_commands(self) -> None:
         runtime_apply_follow_commands(self)
+
+    def _check_output_freeze(self) -> None:
+        runtime_check_output_freeze(self)
 
     def _check_frame_loop_stall(self) -> None:
         runtime_check_frame_loop_stall(self)

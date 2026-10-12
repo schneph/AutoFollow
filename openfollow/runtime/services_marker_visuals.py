@@ -785,6 +785,7 @@ def build_marker_visual_state(
         "next_marker": cc.btn_next_marker,
         "prev_marker": cc.btn_prev_marker,
         "settings": cc.btn_settings,
+        "freeze": cc.btn_freeze,
         "menu_confirm": cc.btn_menu_confirm,
         "menu_cancel": cc.btn_menu_cancel,
         "move_xy_stick": cc.move_xy_stick,
@@ -801,6 +802,7 @@ def build_marker_visual_state(
         "next_marker": cc.key_next_marker,
         "prev_marker": cc.key_prev_marker,
         "settings": cc.key_settings,
+        "freeze": cc.key_freeze,
     }
 
     _populate_zone_overlay(state, cfg, app)

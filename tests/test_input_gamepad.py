@@ -937,6 +937,30 @@ class TestUpdate:
         result = handler.update(0.016)
         assert result.clear_messages_pressed is True
 
+    @pytest.mark.parametrize(("binding", "fires"), [("START", True), ("", False)])
+    def test_freeze_button_edge_fires_only_when_bound(self, stubbed_pygame, binding: str, fires: bool) -> None:
+        handler, _ = make_handler(stubbed_pygame, config=ControllerConfig(btn_freeze=binding))
+        joy = FakeJoystick(num_buttons=16)
+        joy.press(CONTROLLER_BUTTON_START)
+        handler.joysticks[0] = joy
+        handler.capabilities[0] = ControllerCapabilities(backend="joystick")
+        handler._bumper_state[0] = (False, False)
+        handler._shoulder_axis_baselines[0] = {}
+        assert handler.update(0.016).freeze_pressed is fires
+        # Held: no second edge.
+        assert handler.update(0.016).freeze_pressed is False
+
+    def test_freeze_held_through_the_menu_does_not_fire_on_close(self, stubbed_pygame) -> None:
+        handler, _ = make_handler(stubbed_pygame, config=ControllerConfig(btn_freeze="START"))
+        joy = FakeJoystick(num_buttons=16)
+        joy.press(CONTROLLER_BUTTON_START)
+        handler.joysticks[0] = joy
+        handler.capabilities[0] = ControllerCapabilities(backend="joystick")
+        handler._bumper_state[0] = (False, False)
+        handler._shoulder_axis_baselines[0] = {}
+        handler.read_settings_menu_input()
+        assert handler.update(0.016).freeze_pressed is False
+
     def test_clear_messages_unbound_does_not_fire(self, stubbed_pygame) -> None:
         # Default btn_clear_messages = "" → unbound → pressing START is a no-op.
         handler, _ = make_handler(stubbed_pygame)

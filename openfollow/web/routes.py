@@ -2142,6 +2142,7 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "btn_menu_confirm": _as_str,
         "btn_menu_cancel": _as_str,
         "btn_clear_messages": _as_str,
+        "btn_freeze": _as_str,
         "move_xy_stick": _as_str,
         "marker_fader_stick": _as_str,
         "marker_fader_max_speed_s": _as_float,
@@ -2169,6 +2170,7 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "key_prev_marker": _as_str,
         "key_settings": _as_str,
         "key_clear_messages": _as_str,
+        "key_freeze": _as_str,
     },
     "osc": {
         "enabled": _as_bool,
@@ -5125,6 +5127,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             station_down=server.station_interface_down,
             stats=server.get_runtime_stats(),
             controller_slots=_controller_slots_view(server),
+            outputs_frozen=server.outputs_frozen(),
             local_ips=_get_local_ips(),
             update_status=server.get_update_status(),
             fqdn_problems=server.get_station_fqdn_problems(),
@@ -5228,6 +5231,18 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
                 cfg.detection.followed_marker_id = marker_id
                 save_config(cfg, server.config_path)
         return template("partials/performers_table", view=_performers_view(server, cfg))
+
+    @app.get("/section/output_freeze")
+    def get_output_freeze() -> Any:
+        """The freeze control, from the main loop's last poll."""
+        return template("partials/output_freeze", frozen=server.outputs_frozen())
+
+    @app.post("/section/output_freeze/<action:re:freeze|release>")
+    def output_freeze(action: str) -> Any:
+        """Freeze or release every output; the main loop applies it on its next poll."""
+        frozen = action == "freeze"
+        server.request_freeze(frozen)
+        return template("partials/output_freeze", frozen=frozen)
 
     @app.post("/section/controller_slots/<action:re:identify|forget>/<index:int>")
     def controller_slot_action(action: str, index: int) -> Any:

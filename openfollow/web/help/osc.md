@@ -33,6 +33,15 @@ With **All Performers** tracking and a **Spotlight marker** set (see Person Dete
 
 `<markerId>` is an integer, a whole-number float or a numeric string; a negative id is the same as `/follow/none`. An id that is not one of the performer markers, or the spotlight itself, is ignored. A performer who is not on stage yet can still be chosen: the spotlight holds until someone is tracked on that marker. Next and previous step through the performers being tracked, in the same order as the Operator Screen. The choice is saved, exactly as a click on **Follow** is. These cues arrive on the same port, multicast group and sender allowlist as marker positions.
 
+## Freeze cues
+
+```
+/freeze  <on>         above 0 freezes every output, 0 releases
+/freeze/toggle        freeze, or release when frozen
+```
+
+See **Freeze outputs** on the Overview for what a freeze does.
+
 ## Saving
 
 - **Save** – writes the current settings and restarts the OSC receiver if the port or enabled state changed. Changes take effect immediately after saving.

@@ -455,6 +455,7 @@ class KeyboardHandler:
         "key_next_marker",
         "key_prev_marker",
         "key_clear_messages",
+        "key_freeze",
     )
 
     # Map physical modifier keys to the canonical names used by

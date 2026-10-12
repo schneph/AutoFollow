@@ -241,6 +241,11 @@ class WebCommandQueue:
         # loop, which owns the slots.
         self._slot_actions_lock = threading.Lock()
         self._slot_actions: list[tuple[str, int, str]] = []
+        # Freeze requests from the web (True / False / None = toggle), and the
+        # main loop's freeze state mirrored back for the page.
+        self._freeze_lock = threading.Lock()
+        self._freeze_requests: list[bool | None] = []
+        self._outputs_frozen = False
         # The web camera setup changes a Pi camera live: the main loop stops the
         # Pi Camera pipeline before an overlay is unloaded, and rebuilds it after.
         self._camera_release_requested = threading.Event()
@@ -337,6 +342,27 @@ class WebCommandQueue:
         with self._slot_actions_lock:
             actions, self._slot_actions = self._slot_actions, []
         return actions
+
+    def request_freeze(self, frozen: bool | None) -> None:
+        """Queue a freeze (True), release (False) or toggle (None) for the main loop."""
+        with self._freeze_lock:
+            self._freeze_requests.append(frozen)
+
+    def consume_freeze_requests(self) -> list[bool | None]:
+        """Take every queued freeze request, oldest first."""
+        with self._freeze_lock:
+            requests, self._freeze_requests = self._freeze_requests, []
+        return requests
+
+    def publish_outputs_frozen(self, frozen: bool) -> None:
+        """Main loop: record whether the outputs are frozen, for the web UI."""
+        with self._freeze_lock:
+            self._outputs_frozen = bool(frozen)
+
+    def outputs_frozen(self) -> bool:
+        """Whether the outputs were frozen at the main loop's last poll."""
+        with self._freeze_lock:
+            return self._outputs_frozen
 
     def release_camera(self, timeout: float) -> bool:
         """Web thread: have the main loop stop the Pi Camera pipeline; ``True`` once it has.

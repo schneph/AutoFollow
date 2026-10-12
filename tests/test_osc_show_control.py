@@ -12,12 +12,12 @@ import pytest
 
 from openfollow.osc.input import OscMarkerAdapter
 from openfollow.osc.service import _PYTHONOSC_AVAILABLE, OscService
-from openfollow.osc.show_control import FollowCommand, ShowControlOscAdapter
+from openfollow.osc.show_control import FollowCommand, FreezeCommand, ShowControlOscAdapter
 from tests._ports import bind_free_udp_port
 
 pytestmark = pytest.mark.unit
 
-_ADDRESSES = {"/follow", "/follow/next", "/follow/prev", "/follow/none"}
+_ADDRESSES = {"/follow", "/follow/next", "/follow/prev", "/follow/none", "/freeze", "/freeze/toggle"}
 
 
 class _FakeService:
@@ -119,6 +119,37 @@ def test_commands_from_several_threads_are_all_queued() -> None:
     for t in threads:
         t.join()
     assert adapter.flush() == [FollowCommand(step=1)] * 20
+
+
+@pytest.mark.parametrize(
+    "arg,frozen",
+    [(1, True), (1.0, True), (0.5, True), ("1", True), (0, False), (0.0, False), ("0", False), (-1, False)],
+)
+def test_freeze_reads_above_zero_as_hold(arg: Any, frozen: bool) -> None:
+    adapter, svc = _wire()
+    svc.send("/freeze", arg)
+    assert adapter.flush_freeze() == [FreezeCommand(frozen=frozen)]
+    assert adapter.flush() == []
+
+
+@pytest.mark.parametrize("args", [(), ("abc",), (True,), (float("inf"),)])
+def test_freeze_without_a_usable_value_is_dropped(args: tuple[Any, ...]) -> None:
+    adapter, svc = _wire()
+    svc.send("/freeze", *args)
+    assert adapter.flush_freeze() == []
+
+
+def test_freeze_toggle_queues_a_toggle_and_floods_keep_the_newest() -> None:
+    adapter, svc = _wire()
+    svc.send("/freeze/toggle")
+    assert adapter.flush_freeze() == [FreezeCommand()]
+    for _ in range(70):
+        svc.send("/freeze/toggle")
+    svc.send("/freeze", 1)
+    commands = adapter.flush_freeze()
+    assert len(commands) == 64
+    assert commands[-1] == FreezeCommand(frozen=True)
+    assert adapter.flush_freeze() == []
 
 
 @pytest.mark.integration

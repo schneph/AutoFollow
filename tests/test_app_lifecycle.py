@@ -640,6 +640,7 @@ class TestDelegators:
             ("_check_config_reload", "runtime_check_config_reload", ()),
             ("_check_marker_speeds_persist", "runtime_check_marker_speeds_persist", ()),
             ("_check_follow_commands", "runtime_apply_follow_commands", ()),
+            ("_check_output_freeze", "runtime_check_output_freeze", ()),
             ("_check_frame_loop_stall", "runtime_check_frame_loop_stall", ()),
             ("_run_frame", "runtime_run_frame", ()),
         ],

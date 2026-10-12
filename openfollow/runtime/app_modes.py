@@ -18,6 +18,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from openfollow.configuration import save_config
+from openfollow.runtime.output_freeze import set_outputs_frozen
 from openfollow.runtime.services_detection_pin import cycle_followed_performer, follow_performer
 from openfollow.video.failure import SourceKind, VideoFailure, failure_sentence
 
@@ -237,6 +238,8 @@ def process_input(app: OpenFollowApp, dt: float) -> None:
         cycle_marker(app, -1)
     if result.clear_messages_pressed:
         app._clear_operator_messages()
+    if result.freeze_pressed:
+        set_outputs_frozen(app, None)
 
 
 def apply_follow_commands(app: OpenFollowApp) -> None:
@@ -852,6 +855,8 @@ def handle_key_press(app: OpenFollowApp, key: str) -> None:
         app.adjust_move_speed(+1)
     elif cc.key_clear_messages and key == cc.key_clear_messages:
         app._clear_operator_messages()
+    elif cc.key_freeze and key == cc.key_freeze:
+        set_outputs_frozen(app, None)
 
 
 def on_key_down(app: OpenFollowApp, event: dict[str, Any]) -> None:

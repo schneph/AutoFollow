@@ -49,6 +49,7 @@ Controls active during show operation.
 - **Move Z−** / **Move Z+** – lower or raise the marker's height. Defaults: `LT` / `RT`.
 - **Next Marker** / **Prev Marker** – cycle which marker this controller drives. Defaults: `D-Pad Right` / `D-Pad Left`. These are suppressed automatically when more than one controller is connected – gamepads and 3D mice share one numbering – since each controller is pinned to its own marker by the USB socket it is plugged into (see Controller Slots).
 - **Clear Messages** – clears every operator-message card. Default: unbound.
+- **Freeze Outputs** – holds every controlled marker where it is; press again to release (see Overview). Default: unbound.
 
 ### Menu Navigation
 

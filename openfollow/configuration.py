@@ -1773,6 +1773,7 @@ _BUTTON_MAPPING_FIELDS = (
     "btn_menu_confirm",
     "btn_menu_cancel",
     "btn_clear_messages",  # clear operator-message cards
+    "btn_freeze",  # hold every output where it is
     # Deprecated – superseded by btn_menu_confirm / btn_menu_cancel. Kept
     # in the mapping so legacy configs still validate and fall back to
     # defaults on invalid values; no longer used for dispatch.
@@ -1809,6 +1810,7 @@ _KEYBOARD_ACTION_FIELDS = (
     "key_prev_marker",
     "key_settings",
     "key_clear_messages",  # clear operator-message cards
+    "key_freeze",  # hold every output where it is
 )
 
 # Binding groups in form order: the fields of one group may not share an input,
@@ -1826,6 +1828,7 @@ GAMEPAD_ACTION_BUTTON_FORM_LABELS = (
     ("btn_next_marker", "Next Marker"),
     ("btn_prev_marker", "Prev Marker"),
     ("btn_clear_messages", "Clear Messages"),
+    ("btn_freeze", "Freeze Outputs"),
 )
 GAMEPAD_MENU_BUTTON_FORM_LABELS = (
     ("btn_menu_confirm", "Confirm"),
@@ -1846,6 +1849,7 @@ KEYBOARD_ACTION_FORM_LABELS = (
     ("key_clear_messages", "Clear Messages"),
     ("key_next_marker", "Next Marker"),
     ("key_prev_marker", "Prev Marker"),
+    ("key_freeze", "Freeze Outputs"),
 )
 CONTROLLER_BINDING_GROUPS = tuple(
     tuple(name for name, _ in labels)
@@ -1902,6 +1906,8 @@ class ControllerConfig:
     btn_menu_cancel: str = "B"
     # Clear all operator-message cards. Default unbound; edge-triggered.
     btn_clear_messages: str = ""
+    # Freeze / release every output. Default unbound; edge-triggered.
+    btn_freeze: str = ""
     move_xy_stick: str = "left"
     # Marker-fader integrator: which stick Y-axis (if any) drives the fader of
     # the currently-controlled marker. The bus integrates
@@ -1964,6 +1970,8 @@ class ControllerConfig:
     key_settings: str = "m"
     # Clear all operator-message cards. Default unbound.
     key_clear_messages: str = ""
+    # Freeze / release every output.
+    key_freeze: str = "f"
 
     def __post_init__(self) -> None:
         """Validate configuration values."""

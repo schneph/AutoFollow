@@ -34,7 +34,7 @@ from openfollow.configuration import AppConfig
 from openfollow.input.gamepad import GamepadUpdate
 from openfollow.input.input_manager import InputManager
 from openfollow.operator_messages import OperatorMessageStore
-from openfollow.osc.show_control import FollowCommand
+from openfollow.osc.show_control import FollowCommand, FreezeCommand
 from openfollow.psn.marker import Marker
 
 pytestmark = pytest.mark.unit
@@ -649,12 +649,22 @@ class TestShowControlWiring:
         assert manager.flush_follow_commands() == [FollowCommand(marker_id=3), FollowCommand(step=1)]
         assert manager.flush_follow_commands() == []
 
+    def test_freeze_commands_from_the_listener_reach_the_main_loop(self) -> None:
+        app = _DummyApp(osc_enabled=True)
+        manager = InputManager(app)
+        handlers = app._runtime_services._osc_service.handlers
+        handlers["/freeze"]("/freeze", 1)
+        handlers["/freeze/toggle"]("/freeze/toggle")
+        assert manager.flush_freeze_commands() == [FreezeCommand(frozen=True), FreezeCommand()]
+        assert manager.flush_follow_commands() == []
+
     def test_no_listener_means_no_follow_commands(self) -> None:
         app = _DummyApp(osc_enabled=False)
         manager = InputManager(app)
         assert manager.show_control_handler is None
         assert app._runtime_services._osc_service.handlers == {}
         assert manager.flush_follow_commands() == []
+        assert manager.flush_freeze_commands() == []
 
     def test_restart_osc_resubscribes_and_disable_unsubscribes(self) -> None:
         app = _DummyApp(osc_enabled=True)

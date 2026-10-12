@@ -634,6 +634,34 @@ def test_build_help_sections_normal_controller_renders_zone_overlay_line_only_wh
     assert any("Toggle zone overlay" in line for line in controller)
 
 
+@pytest.mark.parametrize(
+    ("keyboard_labels", "button_labels", "expected"),
+    [
+        ({"freeze": "f"}, {}, ("Keyboard", "F: Freeze outputs")),
+        ({}, {"freeze": "START"}, ("Controller", "Start: Freeze outputs")),
+    ],
+)
+def test_build_help_sections_lists_the_freeze_binding(keyboard_labels, button_labels, expected) -> None:  # noqa: ANN001
+    sections = dict(
+        build_help_sections(
+            mode="normal",
+            keyboard_connected=True,
+            controller_connected=True,
+            keyboard_labels=keyboard_labels,
+            button_labels=button_labels,
+        )
+    )
+    title, line = expected
+    assert line in sections[title]
+
+
+def test_build_help_sections_leaves_an_unbound_freeze_out() -> None:
+    sections = dict(
+        build_help_sections(mode="normal", keyboard_connected=True, controller_connected=True, button_labels={})
+    )
+    assert not any("Freeze" in line for lines in sections.values() for line in lines)
+
+
 def test_build_help_sections_unknown_mode_returns_empty() -> None:
     """An unknown mode falls through every elif and returns an empty
     section list – closes the elif-chain → exit branch."""

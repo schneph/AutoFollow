@@ -27,7 +27,7 @@ from openfollow.logging_setup import ThrottledExceptionLogger
 from openfollow.net_utils import plane_source_iface
 from openfollow.osc.input import OscMarkerAdapter
 from openfollow.osc.operator_message import OperatorMessageOscAdapter
-from openfollow.osc.show_control import FollowCommand, ShowControlOscAdapter
+from openfollow.osc.show_control import FollowCommand, FreezeCommand, ShowControlOscAdapter
 from openfollow.runtime.services_detection_pin import (
     get_or_create_manual_marker,
     is_assist_controlled,
@@ -738,6 +738,12 @@ class InputManager:
         if self.show_control_handler is None:
             return []
         return self.show_control_handler.flush()
+
+    def flush_freeze_commands(self) -> list[FreezeCommand]:
+        """Queued ``/freeze`` commands since the last call, oldest first."""
+        if self.show_control_handler is None:
+            return []
+        return self.show_control_handler.flush_freeze()
 
     def stop(self) -> None:
         """Stop input subsystems and release resources."""

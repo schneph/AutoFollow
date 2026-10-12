@@ -79,6 +79,22 @@ class TestPsnStatus:
     def test_a_frozen_marker_ships_an_invalid_tracker(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert self._emit(monkeypatch, 5.0).status == 0.0
 
+    def test_a_held_marker_ships_its_held_position_as_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Freeze outputs holds the position; the frame loop's writes keep it live."""
+        clock = _StepClock(_NOW_US - 5_000_000)
+        server = PsnServer(mcast_ip=None, clock=clock)
+        marker = server.add_marker(1, "T1")
+        marker.set_pos(4.0, 5.0, 6.0)
+        marker.hold(True)
+        clock.now = _NOW_US
+        marker.set_pos(9.0, 9.0, 9.0, status=0.0)  # the next frame's write
+        sent: list[bytes] = []
+        monkeypatch.setattr(server, "_send", lambda data, stop_event=None: sent.append(data))
+        server._send_data_packet()
+        tracker = pypsn.parse_psn_packet(sent[0]).trackers[0]
+        assert tracker.status == 1.0
+        assert (tracker.pos.x, tracker.pos.y, tracker.pos.z) == (4.0, 5.0, 6.0)
+
     def test_the_position_still_ships_while_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Withholding the tracker would read as a disconnect. The console keeps
         its last position; the validity field is what says not to trust it."""

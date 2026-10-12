@@ -15,6 +15,7 @@
 %# Restart progress banner – global (any tab can trigger the restart
 %# from Diagnostics, so the notice has to live above the tabs).
 <div id="top-restart-notice" class="restart-notice" style="display:none;margin-bottom:1rem;">App is restarting&hellip; Please wait.</div>
+% include('partials/output_freeze.tpl', frozen=outputs_frozen)
 
 <div class="tab-bar">
     <button type="button" class="tab-btn" data-tab="overview">Overview</button>

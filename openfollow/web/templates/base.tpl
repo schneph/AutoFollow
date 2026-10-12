@@ -3821,7 +3821,7 @@
  btn_move_z_down: 'LT', btn_move_z_up: 'RT',
  btn_toggle_zones: 'B',
  btn_next_marker: 'DPAD_RIGHT', btn_prev_marker: 'DPAD_LEFT',
- btn_clear_messages: '',
+ btn_clear_messages: '', btn_freeze: '',
  move_xy_stick: 'left', marker_fader_stick: '',
  btn_menu_confirm: 'A', btn_menu_cancel: 'B',
  };
@@ -3841,6 +3841,7 @@
  key_speed_down: 'r', key_speed_up: 't',
  key_settings: 'm', key_clear_messages: '',
  key_next_marker: 'Tab', key_prev_marker: '',
+ key_freeze: 'f',
  };
  container.querySelectorAll('select, input[type="text"]').forEach(el => {
  const def = defaults[el.name];
