@@ -288,9 +288,9 @@ class OverlayState:
     # drives every controlled marker, so several boxes can be attached at once.
     detection_attached_colors: dict[int, str] = field(default_factory=dict)
     # All Performers: ``{track_id: marker label}`` drawn on each performer's box,
-    # and the track the spotlight follows, drawn heavier.
+    # and the tracks the spotlights follow, drawn heavier.
     detection_attached_labels: dict[int, str] = field(default_factory=dict)
-    detection_followed_track_id: int | None = None
+    detection_followed_track_ids: frozenset[int] = frozenset()
     # Button detection wizard
     button_detection: ButtonDetectionState | None = None
     # Configurable button labels for help overlay (action -> button name)
@@ -424,7 +424,7 @@ class OverlayState:
         self.detection_box_thickness = 2
         self.detection_attached_colors = {}
         self.detection_attached_labels = {}
-        self.detection_followed_track_id = None
+        self.detection_followed_track_ids = frozenset()
         self.button_detection = None
         self.button_labels = {}
         self.keyboard_labels = {}

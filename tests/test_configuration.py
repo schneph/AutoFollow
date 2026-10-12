@@ -3219,9 +3219,25 @@ def test_detection_config_clamps_reacquire_radius(bad_radius: object, expected: 
 def test_detection_config_spotlight_defaults_off() -> None:
     cfg = DetectionConfig()
     assert (cfg.spotlight_marker_id, cfg.followed_marker_id) == (-1, -1)
+    assert (cfg.spotlight2_marker_id, cfg.followed2_marker_id, cfg.spotlight3_marker_id, cfg.followed3_marker_id) == (
+        -1,
+        -1,
+        -1,
+        -1,
+    )
 
 
-@pytest.mark.parametrize("field_name", ["spotlight_marker_id", "followed_marker_id"])
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "spotlight_marker_id",
+        "followed_marker_id",
+        "spotlight2_marker_id",
+        "followed2_marker_id",
+        "spotlight3_marker_id",
+        "followed3_marker_id",
+    ],
+)
 @pytest.mark.parametrize(
     "raw,expected",
     [(4, 4), ("7", 7), (-9, -1), ("lead", -1), (None, -1), (True, -1), (2.9, 2)],

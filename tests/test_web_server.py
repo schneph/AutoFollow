@@ -5657,8 +5657,9 @@ def test_performers_panel_lists_each_performer_with_a_follow_button(live_server)
     # The spotlight marker is not a performer.
     assert "Marker 3" not in body
     assert "Tracking a person" in body and "No person - followed" in body
-    assert 'hx-post="/section/detection/follow/1"' in body
-    assert 'hx-post="/section/detection/follow/none"' in body
+    assert 'hx-post="/section/detection/follow/1?spot=1"' in body
+    assert 'hx-post="/section/detection/follow/none?spot=1"' in body
+    assert ">Follow<" in body and ">Stop following<" in body
     assert "--marker-color: #0652dd" in body
 
 
@@ -5692,7 +5693,67 @@ def test_follow_points_the_spotlight_at_a_controlled_performer_only(live_server,
     assert status == 200
     assert load_config(server.config_path).detection.followed_marker_id == expected
     if expected == 2:
-        assert 'hx-post="/section/detection/follow/1"' in body
+        assert 'hx-post="/section/detection/follow/1?spot=1"' in body
+
+
+def _three_spot_server(server: ConfigWebServer) -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2, 3, 4, 5]
+    cfg.viewer_marker_ids = [1, 2, 3, 4, 5]
+    cfg.detection.enabled = True
+    cfg.detection.pin_mode = "multi"
+    cfg.detection.spotlight_marker_id = 4
+    cfg.detection.followed_marker_id = 1
+    cfg.detection.spotlight2_marker_id = 5
+    cfg.detection.followed2_marker_id = 1
+    save_config(cfg, server.config_path)
+    server._runtime_stats_provider = lambda: {"tracking": {"all_performers": {"performers": []}}}
+
+
+def test_performers_panel_with_two_spotlights_names_each_spot(live_server) -> None:
+    server, base = live_server
+    _three_spot_server(server)
+
+    _, body = _get(base, "/section/detection/performers")
+
+    assert "Marker 4" not in body and "Marker 5" not in body
+    assert "followed by Spot 1 and Spot 2" in body
+    assert 'hx-post="/section/detection/follow/none?spot=2"' in body and ">Stop Spot 2<" in body
+    assert 'hx-post="/section/detection/follow/2?spot=2"' in body and ">Spot 2<" in body
+
+
+@pytest.mark.parametrize(
+    ("spot", "field", "changed"),
+    [
+        ("2", "followed2_marker_id", True),
+        ("3", "followed3_marker_id", True),
+        ("4", "followed_marker_id", False),
+        ("x", "followed_marker_id", False),
+    ],
+)
+def test_follow_with_a_spot_number_points_that_spot_only(live_server, spot: str, field: str, changed: bool) -> None:
+    server, base = live_server
+    _three_spot_server(server)
+
+    status, _ = _post_form(base, f"/section/detection/follow/3?spot={spot}", {})
+
+    assert status == 200
+    det = load_config(server.config_path).detection
+    assert (getattr(det, field) == 3) is changed
+    if changed:
+        assert det.followed_marker_id == 1
+
+
+def test_update_detection_tracking_saves_spots_two_and_three(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(
+        base,
+        "/section/detection/tracking",
+        {"tracking_state": "multi", "spotlight2_marker_id": "4", "spotlight3_marker_id": "5"},
+    )
+    assert status == 200
+    det = load_config(server.config_path).detection
+    assert (det.spotlight2_marker_id, det.spotlight3_marker_id) == (4, 5)
 
 
 def test_update_detection_tracking_off_disables_and_keeps_last_mode(live_server) -> None:

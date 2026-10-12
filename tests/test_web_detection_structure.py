@@ -120,6 +120,17 @@ def test_all_performers_offers_a_spotlight_picker_and_the_performers_panel() -> 
     assert 'hx-get="/section/detection/performers"' in html
 
 
+def test_all_performers_offers_pickers_for_spots_two_and_three() -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2, 3]
+    cfg.detection.spotlight3_marker_id = 3
+    html = _render(config=cfg)
+    assert '<label for="detection-spotlight2-marker-id">Spotlight 2 marker</label>' in html
+    assert 'name="spotlight2_marker_id"' in html
+    spot3 = html[html.index('name="spotlight3_marker_id"') :]
+    assert spot3.index('<option value="3" selected>Marker 3</option>') < spot3.index("</select>")
+
+
 def test_spotlight_picker_keeps_a_marker_that_is_no_longer_controlled() -> None:
     cfg = AppConfig()
     cfg.detection.spotlight_marker_id = 5

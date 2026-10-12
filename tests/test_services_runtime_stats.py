@@ -597,7 +597,12 @@ class TestPublishRuntimeStats:
         services.publish_runtime_stats(force=True)
         block = services.get_runtime_stats_snapshot()["tracking"]["all_performers"]
         if enabled and mode == "multi":
-            assert block == {"spotlight_marker_id": None, "followed_marker_id": None, "performers": []}
+            assert block == {
+                "spotlight_marker_id": None,
+                "followed_marker_id": None,
+                "spotlights": [],
+                "performers": [],
+            }
         else:
             assert block is None
 

@@ -211,7 +211,7 @@ def draw_detections(renderer: Any, cr: Any, state: OverlayState, w: int, h: int)
         else:
             r, g, b = default_rgb
 
-        followed = det.track_id == state.detection_followed_track_id
+        followed = det.track_id in state.detection_followed_track_ids
         cr.set_line_width(state.detection_box_thickness * (2 if followed else 1))
         cr.set_source_rgba(r, g, b, 0.8)
         cr.rectangle(x1, y1, x2 - x1, y2 - y1)

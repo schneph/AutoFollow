@@ -55,6 +55,7 @@ from openfollow.configuration import (
     MARKER_TOKEN_ALL,
     MOUSE3D_AXES,
     MOUSE3D_BUTTON_FIELDS,
+    SPOTLIGHT_COUNT,
     VALID_BUTTON_NAMES,
     AppConfig,
     DetectionMaskConfig,
@@ -64,8 +65,10 @@ from openfollow.configuration import (
     _coerce_marker_tokens,
     apply_renamed_marker_keys,
     config_write_lock,
+    followed_field,
     load_config,
     save_config,
+    spotlight_field,
     viewed_with_controlled,
 )
 from openfollow.input.mouse3d_status import status_key
@@ -2554,7 +2557,11 @@ def _performers_view(server: ConfigWebServer, cfg: AppConfig) -> dict[str, Any]:
     block = (server.get_runtime_stats().get("tracking") or {}).get("all_performers") or {}
     catalog = server.get_marker_catalog()
     det = cfg.detection
-    spot = det.spotlight_marker_id if det.spotlight_marker_id in cfg.controlled_marker_ids else -1
+    spots: list[dict[str, Any]] = []
+    for number in range(1, SPOTLIGHT_COUNT + 1):
+        mid = int(getattr(det, spotlight_field(number)))
+        if mid in cfg.controlled_marker_ids and all(s["marker_id"] != mid for s in spots):
+            spots.append({"number": number, "marker_id": mid, "followed": int(getattr(det, followed_field(number)))})
 
     def _entry(mid: int) -> dict[str, Any]:
         entry = catalog.get(mid) if catalog is not None else None
@@ -2565,13 +2572,20 @@ def _performers_view(server: ConfigWebServer, cfg: AppConfig) -> dict[str, Any]:
         }
 
     tracking = {int(p["marker_id"]): bool(p.get("tracking")) for p in block.get("performers") or []}
+    spot_ids = {s["marker_id"] for s in spots}
     performers = []
-    for mid in sorted(m for m in cfg.controlled_marker_ids if m != spot):
+    for mid in sorted(m for m in cfg.controlled_marker_ids if m not in spot_ids):
         row = _entry(mid)
         row["tracking"] = tracking.get(mid, False)
-        row["followed"] = spot >= 0 and mid == det.followed_marker_id
+        row["followed_by"] = [s["number"] for s in spots if s["followed"] == mid]
+        row["followed"] = bool(row["followed_by"])
         performers.append(row)
-    return {"spotlight": _entry(spot) if spot >= 0 else None, "performers": performers}
+    spotlights = [{**_entry(s["marker_id"]), "number": s["number"]} for s in spots]
+    return {
+        "spotlight": spotlights[0] if spotlights else None,
+        "spotlights": spotlights,
+        "performers": performers,
+    }
 
 
 def _osc_binding_marker_entry(
@@ -2994,6 +3008,10 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "reacquire_radius_m": _as_float,
     "spotlight_marker_id": _as_int,
     "followed_marker_id": _as_int,
+    "spotlight2_marker_id": _as_int,
+    "followed2_marker_id": _as_int,
+    "spotlight3_marker_id": _as_int,
+    "followed3_marker_id": _as_int,
 }
 
 
@@ -5220,12 +5238,16 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
 
     @app.post("/section/detection/follow/<target:re:none|[0-9]+>")
     def follow_performer(target: str) -> Any:
-        """Point the spotlight at one performer marker, or at nobody."""
+        """Point a spotlight (``?spot=N``, spot 1 by default) at one performer marker, or at nobody."""
+        try:
+            number = int(request.query.get("spot", "1"))
+        except ValueError:
+            number = 0
         with _config_write_lock:
             cfg = load_config(server.config_path)
             marker_id = -1 if target == "none" else int(target)
-            if marker_id < 0 or marker_id in cfg.controlled_marker_ids:
-                cfg.detection.followed_marker_id = marker_id
+            if 1 <= number <= SPOTLIGHT_COUNT and (marker_id < 0 or marker_id in cfg.controlled_marker_ids):
+                setattr(cfg.detection, followed_field(number), marker_id)
                 save_config(cfg, server.config_path)
         return template("partials/performers_table", view=_performers_view(server, cfg))
 

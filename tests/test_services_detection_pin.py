@@ -35,7 +35,9 @@ from openfollow.runtime.services_detection_pin import (
     detection_status,
     get_or_create_manual_marker,
     is_assist_controlled,
+    performer_marker_ids,
     performer_snapshot,
+    spotlights,
 )
 
 pytestmark = pytest.mark.unit
@@ -2008,9 +2010,10 @@ def test_performer_snapshot_names_the_spotlight_and_each_performer(monkeypatch) 
     assert performer_snapshot(app) == {
         "spotlight_marker_id": 3,
         "followed_marker_id": 2,
+        "spotlights": [{"number": 1, "marker_id": 3, "followed_marker_id": 2}],
         "performers": [
-            {"marker_id": 1, "tracking": True, "followed": False},
-            {"marker_id": 2, "tracking": False, "followed": True},
+            {"marker_id": 1, "tracking": True, "followed": False, "followed_by": []},
+            {"marker_id": 2, "tracking": False, "followed": True, "followed_by": [1]},
         ],
     }
 
@@ -2021,3 +2024,82 @@ def test_performer_snapshot_without_a_spotlight_follows_nobody() -> None:
     assert snap["spotlight_marker_id"] is None
     assert snap["followed_marker_id"] is None
     assert [p["followed"] for p in snap["performers"]] == [False, False, False]
+
+
+# ---------------------------------------------------------------------------
+# Spots 2 and 3 – each its own marker following its own performer.
+# ---------------------------------------------------------------------------
+
+
+def _three_spot_app(**cfg) -> SimpleNamespace:  # noqa: ANN003
+    base = {"spot": 4, "spotlight2_marker_id": 5, "spotlight3_marker_id": 6}
+    base.update(cfg)
+    return _spot_app(ids=(1, 2, 3, 4, 5, 6), **base)
+
+
+def test_every_spotlight_is_left_out_of_the_performer_pool() -> None:
+    app = _three_spot_app()
+    assert performer_marker_ids(app) == [1, 2, 3]
+    assert [(s.number, s.marker_id) for s in spotlights(app)] == [(1, 4), (2, 5), (3, 6)]
+
+
+def test_each_spotlight_follows_its_own_performer(monkeypatch) -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=2, followed3_marker_id=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    by_track = {_track(app, mid): mid for mid in (1, 2, 3)}
+    assert _x(app, 4) == _x(app, 1)
+    assert _x(app, 5) == _x(app, 2)
+    # Two spots may follow the same performer.
+    assert _x(app, 6) == _x(app, 1)
+    assert {by_track[10], by_track[20]} == {1, 2}
+
+
+def test_a_spot_following_nobody_holds_invalid_while_the_others_track(monkeypatch) -> None:
+    app = _three_spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert app._server.get_marker(4).status > 0.0
+    assert app._server.get_marker(5).status == 0.0
+    assert app._server.get_marker(6).status == 0.0
+
+
+def test_spotlights_still_drive_when_nobody_can_be_tracked(monkeypatch) -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=2)
+    _run(app, None, monkeypatch, unproject=_linear_unproject)
+    assert [app._server.get_marker(mid).status for mid in (4, 5)] == [0.0, 0.0]
+
+
+def test_a_marker_named_for_two_spots_is_used_by_the_lower_number() -> None:
+    app = _three_spot_app(spotlight3_marker_id=4)
+    assert [(s.number, s.marker_id) for s in spotlights(app)] == [(1, 4), (2, 5)]
+    assert performer_marker_ids(app) == [1, 2, 3, 6]
+
+
+def test_spot_two_works_without_spot_one(monkeypatch) -> None:
+    app = _three_spot_app(spot=-1, spotlight3_marker_id=-1, followed2_marker_id=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 5) == _x(app, 1)
+    # The next / previous keys move spot 1 only, so with no spot 1 they select markers.
+    assert not cycle_followed_performer(app, +1)
+
+
+def test_spotlights_need_all_performers_and_a_controlled_marker() -> None:
+    assert spotlights(_three_spot_app(pin_mode="assist")) == []
+    assert spotlights(_three_spot_app(enabled=False)) == []
+    app = _three_spot_app(spotlight2_marker_id=9)
+    assert [s.number for s in spotlights(app)] == [1, 3]
+
+
+def test_performer_snapshot_lists_every_spotlight() -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=1, followed3_marker_id=-1)
+    snap = performer_snapshot(app)
+    assert snap["spotlight_marker_id"] == 4
+    assert snap["followed_marker_id"] == 1
+    assert snap["spotlights"] == [
+        {"number": 1, "marker_id": 4, "followed_marker_id": 1},
+        {"number": 2, "marker_id": 5, "followed_marker_id": 1},
+        {"number": 3, "marker_id": 6, "followed_marker_id": None},
+    ]
+    assert [p["followed_by"] for p in snap["performers"]] == [[1, 2], [], []]
