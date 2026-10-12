@@ -3000,6 +3000,9 @@ _DMX_OUTPUT_FIELD_PARSERS: dict[str, _FieldParser] = {
     "host": _as_str,
     "fps": _as_int,
     "priority": _as_int,
+    "ma2_port": _as_int,
+    "ma2_user": _as_str,
+    "ma2_password": _as_str,
 }
 
 _MOVING_LIGHT_FIELD_PARSERS: dict[str, _FieldParser] = {
@@ -3022,6 +3025,7 @@ _MOVING_LIGHT_FIELD_PARSERS: dict[str, _FieldParser] = {
     "heading": _as_float,
     "base_pitch": _as_float,
     "base_roll": _as_float,
+    "ma2_fixture": _as_int,
 }
 
 

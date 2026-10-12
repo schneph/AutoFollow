@@ -89,6 +89,25 @@ def test_saving_the_output_settings(lights_server) -> None:
     assert (dmx.enabled, dmx.protocol) == (False, "sacn")
 
 
+def test_saving_the_grandma2_login(lights_server) -> None:
+    server, base, _, _ = lights_server
+    status, body = _request(
+        base,
+        "/section/dmx_output",
+        form={
+            "protocol": "ma2",
+            "host": "10.0.0.4",
+            "ma2_port": "30001",
+            "ma2_user": " follow ",
+            "ma2_password": " pw ",
+        },
+    )
+    assert status == 200
+    assert '<option value="ma2" selected>' in body
+    dmx = load_config(server.config_path).dmx_output
+    assert (dmx.protocol, dmx.ma2_port, dmx.ma2_user, dmx.ma2_password) == ("ma2", 30001, "follow", " pw ")
+
+
 def test_get_section_renders(lights_server) -> None:
     _, base, _, _ = lights_server
     status, body = _request(base, "/section/dmx_output", method="GET")
@@ -122,6 +141,7 @@ def test_adding_saving_and_deleting_a_light(lights_server) -> None:
             "pos_x": "2.5",
             "heading": "90",
             "invert_tilt": "on",
+            "ma2_fixture": "301",
         },
     )
     assert status == 200
@@ -137,6 +157,7 @@ def test_adding_saving_and_deleting_a_light(lights_server) -> None:
     )
     # Unchecked boxes are off: the form posts nothing for them.
     assert (saved.enabled, saved.fine, saved.invert_pan, saved.invert_tilt) == (False, False, False, True)
+    assert saved.ma2_fixture == 301
 
     status, _ = _request(base, f"/section/moving_light/{new.id}/delete", form={})
     assert status == 200
@@ -298,6 +319,11 @@ def test_solving_a_light_that_is_gone_is_404(lights_server) -> None:
         ("moving_light", "pan_range", "0", False),
         ("moving_light", "base_pitch", "10", True),
         ("moving_light", "heading", "abc", False),
+        ("dmx_output", "ma2_port", "70000", False),
+        ("dmx_output", "ma2_user", "follow", True),
+        ("dmx_output", "protocol", "ma2", True),
+        ("moving_light", "ma2_fixture", "101", True),
+        ("moving_light", "ma2_fixture", "-1", False),
     ],
 )
 def test_fields_validate_on_blur(lights_server, section: str, field: str, value: str, ok: bool) -> None:

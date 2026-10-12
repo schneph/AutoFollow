@@ -1120,7 +1120,7 @@ class RttrpmOutputConfig:
         self.source_iface = self.source_iface.strip()
 
 
-DMX_PROTOCOLS = ("sacn", "artnet")
+DMX_PROTOCOLS = ("sacn", "artnet", "ma2")
 MOVING_LIGHT_MOUNTINGS = ("hung", "floor")
 _MAX_DMX_UNIVERSE = 63999
 
@@ -1152,6 +1152,8 @@ class MovingLightConfig:
     heading: float = 0.0
     base_pitch: float = 0.0
     base_roll: float = 0.0
+    # grandMA2 fixture ID, used instead of the patch over Telnet; 0 = not sent there.
+    ma2_fixture: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -1177,6 +1179,7 @@ class MovingLightConfig:
         self.heading = _coerce_float(self.heading, 0.0, lo=-360.0, hi=360.0)
         self.base_pitch = _coerce_float(self.base_pitch, 0.0, lo=-45.0, hi=45.0)
         self.base_roll = _coerce_float(self.base_roll, 0.0, lo=-45.0, hi=45.0)
+        self.ma2_fixture = _coerce_int(self.ma2_fixture, 0, lo=0, hi=99999)
 
     def channels(self) -> tuple[int, int]:
         """The 0-based universe slots of the pan and tilt coarse channels."""
@@ -1194,6 +1197,10 @@ class DmxOutputConfig:
     fps: int = 30
     # sACN priority for the pan / tilt channels; every other channel is left to the desk.
     priority: int = 150
+    ma2_port: int = 30000
+    ma2_user: str = ""
+    # Kept as typed: whitespace can be part of a password and is invisible in the field.
+    ma2_password: str = ""
     fixtures: list[MovingLightConfig] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -1202,6 +1209,9 @@ class DmxOutputConfig:
         self.host = _coerce_str(self.host, "").strip()
         self.fps = _coerce_int(self.fps, 30, lo=1, hi=44)
         self.priority = _coerce_int(self.priority, 150, lo=1, hi=200)
+        self.ma2_port = _coerce_int(self.ma2_port, 30000, lo=1, hi=65535)
+        self.ma2_user = _coerce_str(self.ma2_user, "").strip()[:64]
+        self.ma2_password = _coerce_str(self.ma2_password, "")[:64]
         self.fixtures = [
             MovingLightConfig(**_filter_known(MovingLightConfig, f)) if isinstance(f, dict) else f
             for f in self.fixtures

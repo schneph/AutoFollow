@@ -2,14 +2,14 @@
 
 > Moving lights output is experimental. Try it with your fixtures and your console before a show depends on it.
 
-Points moving lights at markers by sending their pan and tilt channels over sACN (E1.31) or Art-Net. Each light follows one marker on this station. The station works out the pan and tilt from where the light hangs, so the beam lands on the marker's position on stage.
+Points moving lights at markers by sending their pan and tilt channels over sACN (E1.31) or Art-Net, or as commands to a grandMA2 over Telnet. Each light follows one marker on this station. The station works out the pan and tilt from where the light hangs, so the beam lands on the marker's position on stage.
 
 ## Output
 
 - **Enabled** – start sending. Off sends nothing at all.
-- **Protocol** – **sACN** or **Art-Net**.
-- **Destination Host** – where to send. Blank sends sACN to each universe's standard multicast group and Art-Net to broadcast. Enter a node's or console's address to send to it alone.
-- **Send Rate (FPS)** – packets per second per universe, 1–44. Default: `30`.
+- **Protocol** – **sACN**, **Art-Net** or **grandMA2 (Telnet)**.
+- **Destination Host** – where to send. Blank sends sACN to each universe's standard multicast group and Art-Net to broadcast. Enter a node's or console's address to send to it alone. For grandMA2 this is the console's (or onPC's) address and is required.
+- **Send Rate (FPS)** – packets per second per universe, 1–44. Default: `30`. grandMA2 Telnet sends at most 15 times a second.
 - **sACN Priority** – 1–200, default `150`. Set it above your console's priority so a receiver that merges by priority takes the pan and tilt from this station.
 
 ### Sharing a universe with the console
@@ -18,12 +18,25 @@ Over sACN the station also sends per-address priority (start code `0xDD`) that c
 
 Art-Net has no such priority. Send it to a node that merges (HTP / LTP merge of two sources), or patch the lights' pan and tilt on a universe the console does not send.
 
+## grandMA2 Telnet
+
+For a grandMA2 that cannot merge another source's DMX, the station types each light's pan and tilt into the console's command line instead: `Fixture 101 ; Attribute "Pan" At 12.50 ; Attribute "Tilt" At -40.00`, only when the light has moved.
+
+- **Telnet Port** – default `30000`.
+- **User** / **Password** – the console user the station logs in as. Create a user just for this: the values land in that user's programmer, so they never mix with the operator's.
+- On the console, allow Telnet login (**Setup → Console → Global Settings → Telnet**).
+- Each light needs its **grandMA2 Fixture ID**; a light left at `0` is not sent. Universe, address and channels are not used.
+- Values are degrees from the centre of the fixture's travel, as the console shows them. If a light moves the wrong way, use **Invert Pan** / **Invert Tilt** here rather than in the console's patch.
+
+An unreachable console is retried every few seconds, and each light is sent again once it answers.
+
 ## Lights
 
 Each light has:
 
 - **Enabled** and **Name**.
 - **Follows Marker** – one of this station's controlled markers. Markers from other stations are not followed.
+- **grandMA2 Fixture ID** – the light's fixture ID on the console, for grandMA2 Telnet only.
 - **Universe** and **Address** – where the fixture is patched. sACN universes are 1–63999, Art-Net 0–32767.
 - **Pan Channel** / **Tilt Channel** – the channel numbers within the fixture's mode, counted from 1 (the fixture's first channel is its address).
 - **16-bit** – send coarse and fine (the fine channel follows straight after the coarse one). Off sends 8-bit pan and tilt.
