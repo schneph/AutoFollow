@@ -12,7 +12,7 @@ Placeholder grammar:
     [ source (":" index)? ("." transform)* ]
 
 - ``source`` is one of :data:`_SOURCES` (``x`` / ``y`` / ``z`` /
-  ``markerid`` / ``fader`` / ``markerfader`` / ``value`` / ``velocity``
+  ``u`` / ``v`` / ``markerid`` / ``fader`` / ``markerfader`` / ``value`` / ``velocity``
   / ``note``).
 - ``index`` is a positional ``:N`` – a marker id for ``x`` / ``y`` /
   ``z`` / ``markerid`` / ``markerfader``, a fader number for ``fader``.
@@ -65,6 +65,8 @@ _SOURCES: frozenset[str] = frozenset(
         "x",
         "y",
         "z",
+        "u",
+        "v",
         "markerid",
         "fader",
         "markerfader",
@@ -82,7 +84,7 @@ _SOURCES_BY_LENGTH: tuple[str, ...] = tuple(sorted(_SOURCES, key=len, reverse=Tr
 # Sources that accept a positional ``:N`` reference. Event sources don't
 # – ``[value:3]`` is a parse error (→ literal).
 _INDEXED_SOURCES: frozenset[str] = frozenset(
-    {"x", "y", "z", "markerid", "fader", "markerfader"},
+    {"x", "y", "z", "u", "v", "markerid", "fader", "markerfader"},
 )
 
 # Position sources share the metre/grid domain (centre 0) and accept the
@@ -91,10 +93,17 @@ _INDEXED_SOURCES: frozenset[str] = frozenset(
 # reflects about each domain's centre – see :func:`_apply_transform`.
 _POSITION_SOURCES: frozenset[str] = frozenset({"x", "y", "z"})
 
+# A marker's place in the projected image, 0..1 across (``u``) and down
+# (``v``), through the grid's projection area. They share the 0..1 driver
+# domain, so they take the fader transforms.
+_PROJECTION_SOURCES: frozenset[str] = frozenset({"u", "v"})
+
 # Marker-keyed sources: a bare (index-less) one resolves against the
 # row's default marker. ``fader`` is keyed by the default fader instead
 # (see :func:`requires_default_fader`).
-_DEFAULT_MARKER_SOURCES: frozenset[str] = _POSITION_SOURCES | frozenset({"markerid", "markerfader"})
+_DEFAULT_MARKER_SOURCES: frozenset[str] = (
+    _POSITION_SOURCES | _PROJECTION_SOURCES | frozenset({"markerid", "markerfader"})
+)
 
 # Sources whose OSC wire type is integer when emitted bare (no
 # transform). A trailing ``int`` transform forces ``i`` regardless of
@@ -113,6 +122,8 @@ _ALLOWED_TRANSFORMS: dict[str, frozenset[str]] = {
     "x": frozenset({"inv", "frac"}),
     "y": frozenset({"inv", "frac"}),
     "z": frozenset({"inv", "frac"}),
+    "u": frozenset({"inv", "pct", "int", "scale"}),
+    "v": frozenset({"inv", "pct", "int", "scale"}),
     "fader": frozenset({"inv", "pct", "int", "scale"}),
     "markerfader": frozenset({"inv", "pct", "int", "scale"}),
 }
@@ -222,6 +233,7 @@ MarkerFaderResolver = Callable[[int], float | None]
 # default-marker dependency.
 ControllerMarkerResolver = Callable[[int], int | None]
 MarkerStaleResolver = Callable[[int], bool]
+ProjectionResolver = Callable[[float, float], tuple[float, float] | None]
 
 
 @dataclass(frozen=True)
@@ -267,6 +279,10 @@ class RenderContext:
     event_value: int | None = None
     event_velocity: int | None = None
     event_note: int | None = None
+    # Floor point -> its (u, v) in the projected image; ``None`` (the
+    # mapping) when the projection area is not usable, ``None`` (the
+    # result) for a point beyond the projection's horizon.
+    projection: ProjectionResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -735,6 +751,9 @@ def _slot_value(slot: _Slot, ctx: RenderContext) -> Any:
     if source in _POSITION_SOURCES:
         value: float = _resolve_position_source(slot, ctx)
         family = "position"
+    elif source in _PROJECTION_SOURCES:
+        value = _resolve_projection_source(slot, ctx)
+        family = "fader"
     elif source == "fader":
         value = _resolve_fader_source(slot, ctx)
         family = "fader"
@@ -777,8 +796,8 @@ def _resolve_event_source(slot: _Slot, ctx: RenderContext) -> int:
     return _resolve_event_field(field_value, source)
 
 
-def _resolve_position_source(slot: _Slot, ctx: RenderContext) -> float:
-    """Resolve an ``x`` / ``y`` / ``z`` slot to its raw metre value.
+def _slot_marker_position(slot: _Slot, ctx: RenderContext) -> tuple[float, float, float]:
+    """The position a marker-keyed slot refers to, in metres.
 
     Default slots read ``ctx.pos_m`` (raising when no default marker is
     configured); explicit ``[x:N]`` slots go through
@@ -787,13 +806,28 @@ def _resolve_position_source(slot: _Slot, ctx: RenderContext) -> float:
     """
     if slot.controller_index is not None:
         marker_id = _resolve_controller_marker(slot, ctx)
-        x, y, z = _resolve_marker_position(marker_id, _slot_inner(slot), ctx)
-    elif slot.ref_index is not None:
-        x, y, z = _resolve_explicit_marker(slot, ctx)
-    else:
-        if ctx.marker_id is None:
-            raise RenderError(_slot_inner(slot), hint="no default marker configured")
-        x, y, z = ctx.pos_m
+        return _resolve_marker_position(marker_id, _slot_inner(slot), ctx)
+    if slot.ref_index is not None:
+        return _resolve_explicit_marker(slot, ctx)
+    if ctx.marker_id is None:
+        raise RenderError(_slot_inner(slot), hint="no default marker configured")
+    return ctx.pos_m
+
+
+def _resolve_projection_source(slot: _Slot, ctx: RenderContext) -> float:
+    """Resolve a ``u`` / ``v`` slot to the marker's 0..1 place in the projected image."""
+    x, y, _ = _slot_marker_position(slot, ctx)
+    if ctx.projection is None:
+        raise RenderError(_slot_inner(slot), hint="projection area is not a convex quadrilateral")
+    uv = ctx.projection(x, y)
+    if uv is None:
+        raise RenderError(_slot_inner(slot), hint="marker is beyond the projection's horizon")
+    return uv[0] if slot.source == "u" else uv[1]
+
+
+def _resolve_position_source(slot: _Slot, ctx: RenderContext) -> float:
+    """Resolve an ``x`` / ``y`` / ``z`` slot to its raw metre value."""
+    x, y, z = _slot_marker_position(slot, ctx)
     source = slot.source
     if source == "x":
         return x

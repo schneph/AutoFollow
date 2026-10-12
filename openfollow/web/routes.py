@@ -1813,6 +1813,14 @@ _SECTION_LENGTH_FIELDS: dict[str, frozenset[str]] = {
             "z_offset",
             "origin_length",
             "max_height",
+            "projection_tl_x",
+            "projection_tl_y",
+            "projection_tr_x",
+            "projection_tr_y",
+            "projection_br_x",
+            "projection_br_y",
+            "projection_bl_x",
+            "projection_bl_y",
         }
     ),
     "marker": frozenset(
@@ -2083,6 +2091,15 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "origin_visible": _as_bool,
         "origin_length": _as_float,
         "origin_thickness": _as_int,
+        "projection_use_grid": _as_bool,
+        "projection_tl_x": _as_float,
+        "projection_tl_y": _as_float,
+        "projection_tr_x": _as_float,
+        "projection_tr_y": _as_float,
+        "projection_br_x": _as_float,
+        "projection_br_y": _as_float,
+        "projection_bl_x": _as_float,
+        "projection_bl_y": _as_float,
     },
     "movement": {
         "min_speed": _as_float,
@@ -6418,7 +6435,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
     @app.post("/section/grid")
     def update_grid() -> Any:
         """Update grid settings."""
-        cfg = _save_section_from_form("grid", bool_fields=("visible", "origin_visible"))
+        cfg = _save_section_from_form("grid", bool_fields=("visible", "origin_visible", "projection_use_grid"))
         return template("partials/grid", config=cfg, saved=True)
 
     @app.post("/section/movement")

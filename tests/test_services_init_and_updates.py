@@ -2574,6 +2574,33 @@ class TestInitOscTransmitters:
         )
         assert services._grid_provider() == (10.0, 6.0, 4.0, 0.5)
 
+    def test_projection_provider_follows_the_grid(
+        self,
+        services: AppRuntimeServices,
+    ) -> None:
+        from openfollow.configuration import GridConfig
+
+        services._app._config = replace(services._app._config, grid=GridConfig(width=10.0, depth=6.0, y_offset=3.0))
+        uv = services._projection_provider()
+        assert uv is not None
+        assert uv(2.5, 4.5) == pytest.approx((0.75, 0.25))
+        # Unchanged corners reuse the mapping; a moved grid rebuilds it.
+        assert services._projection_provider() is uv
+        services._app._config = replace(services._app._config, grid=GridConfig(width=20.0, depth=6.0, y_offset=3.0))
+        rebuilt = services._projection_provider()
+        assert rebuilt is not uv and rebuilt is not None
+        assert rebuilt(5.0, 3.0) == pytest.approx((0.75, 0.5))
+
+    def test_projection_provider_is_none_for_an_unusable_area(
+        self,
+        services: AppRuntimeServices,
+    ) -> None:
+        from openfollow.configuration import GridConfig
+
+        bow_tie = GridConfig(projection_use_grid=False, projection_tr_x=5.0, projection_tr_y=0.0, projection_br_y=6.0)
+        services._app._config = replace(services._app._config, grid=bow_tie)
+        assert services._projection_provider() is None
+
     def test_fader_provider_returns_value_for_valid_index(
         self,
         services: AppRuntimeServices,

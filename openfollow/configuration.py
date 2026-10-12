@@ -439,6 +439,18 @@ _GRID_THICKNESS_DEFAULT = 1
 _GRID_TRANSPARENCY_DEFAULT = 0.6
 
 
+_PROJECTION_CORNER_DEFAULTS = {
+    "projection_tl_x": -5.0,
+    "projection_tl_y": 6.0,
+    "projection_tr_x": 5.0,
+    "projection_tr_y": 6.0,
+    "projection_br_x": 5.0,
+    "projection_br_y": 0.0,
+    "projection_bl_x": -5.0,
+    "projection_bl_y": 0.0,
+}
+
+
 @dataclass
 class GridConfig:
     # Master show/hide for the grid overlay. Default on so existing configs
@@ -461,6 +473,17 @@ class GridConfig:
     origin_visible: bool = False
     origin_length: float = 1.0
     origin_thickness: int = 3
+    # Floor area a projector's image covers, for the ``[u]`` / ``[v]`` OSC
+    # placeholders: the grid itself, or the four corners below (PSN metres).
+    projection_use_grid: bool = True
+    projection_tl_x: float = -5.0
+    projection_tl_y: float = 6.0
+    projection_tr_x: float = 5.0
+    projection_tr_y: float = 6.0
+    projection_br_x: float = 5.0
+    projection_br_y: float = 0.0
+    projection_bl_x: float = -5.0
+    projection_bl_y: float = 0.0
 
     def __post_init__(self) -> None:
         # Dimensions/offsets reach numpy float buffers in draw_grid; appearance
@@ -487,6 +510,9 @@ class GridConfig:
         self.origin_visible = _coerce_bool(self.origin_visible, False)
         self.origin_length = _coerce_float(self.origin_length, 1.0, lo=0.1)
         self.origin_thickness = _coerce_int(self.origin_thickness, 3, lo=1, hi=20)
+        self.projection_use_grid = _coerce_bool(self.projection_use_grid, True)
+        for name, default in _PROJECTION_CORNER_DEFAULTS.items():
+            setattr(self, name, _coerce_float(getattr(self, name), default))
 
 
 # Operator Screen marker glyph; each style reads only its own fields.

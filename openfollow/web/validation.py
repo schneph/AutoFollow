@@ -424,6 +424,15 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         "origin_thickness": FieldRule(
             _as_int, lo=1, hi=20, human_error="Origin thickness must be between 1 and 20 px."
         ),
+        "projection_use_grid": FieldRule(_as_bool),
+        "projection_tl_x": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_tl_y": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_tr_x": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_tr_y": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_br_x": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_br_y": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_bl_x": FieldRule(_as_float, human_error="Must be a number."),
+        "projection_bl_y": FieldRule(_as_float, human_error="Must be a number."),
     },
     "movement": {
         "min_speed": FieldRule(_as_float, lo=0.0, human_error="Min speed must be ≥ 0."),
