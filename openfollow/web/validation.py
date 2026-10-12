@@ -659,10 +659,17 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
     },
     "dmx_output": {
         "enabled": FieldRule(_as_bool),
-        "protocol": FieldRule(_as_str, choices=DMX_PROTOCOLS, human_error="Protocol must be sACN or Art-Net."),
+        "protocol": FieldRule(
+            _as_str, choices=DMX_PROTOCOLS, human_error="Protocol must be sACN, Art-Net or grandMA2 Telnet."
+        ),
         "host": FieldRule(_as_str, max_len=255, custom=_validate_host, human_error="Host must be a hostname or IP."),
         "fps": FieldRule(_as_int, lo=1, hi=44, human_error="Send rate must be between 1 and 44."),
         "priority": FieldRule(_as_int, lo=1, hi=200, human_error="Priority must be between 1 and 200."),
+        "ma2_port": FieldRule(_as_int, lo=1, hi=65535, human_error="Port must be between 1 and 65535."),
+        "ma2_user": FieldRule(_as_str, max_len=64, human_error="User must be 0–64 characters."),
+        "ma2_password": FieldRule(
+            _as_str, max_len=64, strip_whitespace=False, human_error="Password must be 0–64 characters."
+        ),
     },
     "moving_light": {
         "name": FieldRule(_as_str, max_len=64, human_error="Name must be 0–64 characters."),
@@ -692,6 +699,7 @@ FIELD_RULES: dict[str, dict[str, FieldRule]] = {
         "base_roll": FieldRule(
             _as_float, lo=-45.0, hi=45.0, human_error="Base tilt must be between -45 and 45 degrees."
         ),
+        "ma2_fixture": FieldRule(_as_int, lo=0, hi=99999, human_error="Fixture ID must be between 0 and 99999."),
     },
     # Shared OSC destination profiles (name + connection).
     "osc_destination": {

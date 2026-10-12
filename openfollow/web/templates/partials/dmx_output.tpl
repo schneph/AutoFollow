@@ -7,7 +7,7 @@
       hx-post="/section/dmx_output" hx-target="#dmx-output-section" hx-swap="outerHTML" hx-trigger="submit">
     <div class="section-head">
         <h2>Moving Lights <span class="badge-experimental">Experimental</span></h2>
-        <span class="section-note">Pan and tilt over sACN or Art-Net</span>
+        <span class="section-note">Pan and tilt over sACN, Art-Net or grandMA2 Telnet</span>
     </div>
 
     <div class="group">
@@ -22,6 +22,7 @@
                 <select id="dmx-output-protocol" name="protocol">
                     <option value="sacn" {{'selected' if dmx.protocol == 'sacn' else ''}}>sACN (E1.31)</option>
                     <option value="artnet" {{'selected' if dmx.protocol == 'artnet' else ''}}>Art-Net</option>
+                    <option value="ma2" {{'selected' if dmx.protocol == 'ma2' else ''}}>grandMA2 (Telnet)</option>
                 </select>
             </div>
             <div class="field">
@@ -47,6 +48,36 @@
                        hx-target="#dmx-output-priority-error" hx-swap="innerHTML" hx-include="closest form"
                        aria-describedby="dmx-output-priority-error" aria-invalid="false">
                 <span id="dmx-output-priority-error" class="field-error"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="group">
+        <h3 class="group-title">grandMA2 Telnet</h3>
+        <div class="row">
+            <div class="field">
+                <label for="dmx-output-ma2-port">Telnet Port</label>
+                <input id="dmx-output-ma2-port" type="number" name="ma2_port" value="{{dmx.ma2_port}}" min="1" max="65535" step="1"
+                       hx-get="/api/validate/dmx_output/ma2_port" hx-trigger="blur changed delay:200ms"
+                       hx-target="#dmx-output-ma2-port-error" hx-swap="innerHTML" hx-include="closest form"
+                       aria-describedby="dmx-output-ma2-port-error" aria-invalid="false">
+                <span id="dmx-output-ma2-port-error" class="field-error"></span>
+            </div>
+            <div class="field">
+                <label for="dmx-output-ma2-user">User</label>
+                <input id="dmx-output-ma2-user" type="text" name="ma2_user" value="{{dmx.ma2_user}}" maxlength="64" autocomplete="off"
+                       hx-get="/api/validate/dmx_output/ma2_user" hx-trigger="blur changed delay:200ms"
+                       hx-target="#dmx-output-ma2-user-error" hx-swap="innerHTML" hx-include="closest form"
+                       aria-describedby="dmx-output-ma2-user-error" aria-invalid="false">
+                <span id="dmx-output-ma2-user-error" class="field-error"></span>
+            </div>
+            <div class="field">
+                <label for="dmx-output-ma2-password">Password</label>
+                <input id="dmx-output-ma2-password" type="password" name="ma2_password" value="{{dmx.ma2_password}}" maxlength="64" autocomplete="off"
+                       hx-get="/api/validate/dmx_output/ma2_password" hx-trigger="blur changed delay:200ms"
+                       hx-target="#dmx-output-ma2-password-error" hx-swap="innerHTML" hx-include="closest form"
+                       aria-describedby="dmx-output-ma2-password-error" aria-invalid="false">
+                <span id="dmx-output-ma2-password-error" class="field-error"></span>
             </div>
         </div>
     </div>

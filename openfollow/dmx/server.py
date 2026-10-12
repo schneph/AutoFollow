@@ -7,7 +7,8 @@ frame and writes them into that fixture's universe. A marker that is missing
 or stale holds the light where it last pointed, since a light has no way to
 say "unknown" and swinging to a default would sweep the stage. Over sACN a
 per-address priority packet claims only the pan / tilt channels, so a
-receiver that merges by priority takes everything else from the desk.
+receiver that merges by priority takes everything else from the desk. A
+grandMA2 is driven over Telnet instead, one command per light that moved.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from openfollow.dmx.ma2 import MIN_STEP_DEG, Ma2Session, aim_command
 from openfollow.dmx.packets import (
     ARTNET_MAX_UNIVERSE,
     ARTNET_PORT,
@@ -46,6 +48,8 @@ MarkerLookup = Callable[[int], "Marker | None"]
 # How often sACN per-address priority is repeated, as E1.31 receivers expect about once a second.
 _PRIORITY_INTERVAL_S = 1.0
 _BROADCAST = "255.255.255.255"
+# The console runs every Telnet command through its command line; faster floods its queue.
+MA2_MAX_FPS = 15
 
 
 def fixture_pose(fixture: MovingLightConfig) -> FixturePose:
@@ -86,23 +90,23 @@ class Frame:
                 owned[slot + offset] = 1
 
 
-def build_frame(
+def aim_fixtures(
     cfg: DmxOutputConfig,
     markers: MarkerLookup,
     last: dict[str, tuple[float, float]],
     aims: dict[str, tuple[float, float]],
     *,
     now_us: int | None = None,
-) -> Frame:
-    """Every enabled fixture's pan / tilt, updating ``last`` with what each now points at.
+) -> list[tuple[MovingLightConfig, tuple[float, float]]]:
+    """Every enabled fixture with the pan / tilt fractions it now points at, updating ``last``.
 
     ``aims`` holds fixtures pointed by hand (while calibrating); they ignore
     their marker. A fixture whose marker is missing or stale repeats ``last``,
-    and one that has never had a position sends nothing.
+    and one that has never had a position is left out.
     """
-    frame = Frame()
+    out = []
     for fixture in cfg.fixtures:
-        if not fixture.enabled or not universe_in_range(cfg.protocol, fixture.universe):
+        if not fixture.enabled:
             continue
         fractions = aims.get(fixture.id)
         if fractions is None:
@@ -115,10 +119,51 @@ def build_frame(
         if fractions is None:
             continue
         last[fixture.id] = fractions
+        out.append((fixture, fractions))
+    return out
+
+
+def build_frame(
+    cfg: DmxOutputConfig,
+    markers: MarkerLookup,
+    last: dict[str, tuple[float, float]],
+    aims: dict[str, tuple[float, float]],
+    *,
+    now_us: int | None = None,
+) -> Frame:
+    """The universes carrying every aimed fixture's pan / tilt (see :func:`aim_fixtures`)."""
+    frame = Frame()
+    for fixture, fractions in aim_fixtures(cfg, markers, last, aims, now_us=now_us):
+        if not universe_in_range(cfg.protocol, fixture.universe):
+            continue
         pan_slot, tilt_slot = fixture.channels()
         frame.write(fixture.universe, pan_slot, to_dmx(fractions[0], fixture.fine))
         frame.write(fixture.universe, tilt_slot, to_dmx(fractions[1], fixture.fine))
     return frame
+
+
+def ma2_degrees(fixture: MovingLightConfig, fractions: tuple[float, float]) -> tuple[float, float]:
+    """Pan / tilt as the console shows them: degrees from the centre of travel, in the channel's direction."""
+    return (fractions[0] - 0.5) * fixture.pan_range, (fractions[1] - 0.5) * fixture.tilt_range
+
+
+def ma2_commands(
+    cfg: DmxOutputConfig,
+    aimed: list[tuple[MovingLightConfig, tuple[float, float]]],
+    sent: dict[str, tuple[float, float]],
+) -> list[str]:
+    """Commands for the fixtures that moved at least :data:`MIN_STEP_DEG` since ``sent``, updating it."""
+    commands = []
+    for fixture, fractions in aimed:
+        if fixture.ma2_fixture <= 0:
+            continue
+        pan, tilt = ma2_degrees(fixture, fractions)
+        previous = sent.get(fixture.id)
+        if previous is not None and max(abs(pan - previous[0]), abs(tilt - previous[1])) < MIN_STEP_DEG:
+            continue
+        sent[fixture.id] = (pan, tilt)
+        commands.append(aim_command(fixture.ma2_fixture, pan, tilt))
+    return commands
 
 
 class DmxOutputServer:
@@ -132,6 +177,7 @@ class DmxOutputServer:
         source_name: str = "OpenFollow",
         socket_factory: Callable[[], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        ma2_connect: Callable[[tuple[str, int], float], Any] | None = None,
     ) -> None:
         self._cfg = cfg
         self._markers = markers
@@ -148,6 +194,9 @@ class DmxOutputServer:
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
         self._warned_failure = False
+        self._ma2: Ma2Session | None = None
+        self._ma2_sent: dict[str, tuple[float, float]] = {}
+        self._ma2_connect = ma2_connect
 
     @staticmethod
     def _open_socket() -> socket.socket:
@@ -163,7 +212,14 @@ class DmxOutputServer:
     def start(self) -> None:
         if self.running:
             return
-        self._sock = self._socket_factory()
+        if self._cfg.protocol == "ma2":
+            cfg = self._cfg
+            self._ma2 = Ma2Session(
+                cfg.host, cfg.ma2_port, cfg.ma2_user, cfg.ma2_password, clock=self._clock, connect=self._ma2_connect
+            )
+            self._ma2_sent = {}
+        else:
+            self._sock = self._socket_factory()
         stop = threading.Event()
         self._stop = stop
         self._thread = threading.Thread(target=self._loop, args=(stop,), name="dmx-output", daemon=True)
@@ -179,6 +235,9 @@ class DmxOutputServer:
         if self._sock is not None:
             self._sock.close()
             self._sock = None
+        if self._ma2 is not None:
+            self._ma2.close()
+            self._ma2 = None
 
     def restart(self, cfg: DmxOutputConfig) -> None:
         self.stop()
@@ -207,9 +266,13 @@ class DmxOutputServer:
         while not stop.is_set():
             started = self._clock()
             self.send_once()
-            stop.wait(max(0.0, 1.0 / self._cfg.fps - (self._clock() - started)))
+            fps = min(self._cfg.fps, MA2_MAX_FPS) if self._cfg.protocol == "ma2" else self._cfg.fps
+            stop.wait(max(0.0, 1.0 / fps - (self._clock() - started)))
 
     def send_once(self) -> None:
+        if self._cfg.protocol == "ma2":
+            self._send_ma2()
+            return
         with self._lock:
             cfg = self._cfg
             frame = build_frame(cfg, self._markers, self._last, dict(self._aims))
@@ -232,6 +295,20 @@ class DmxOutputServer:
             if send_priority:
                 levels = bytes(cfg.priority if owned else 0 for owned in frame.owned[universe])
                 self._send(self._sacn(cfg, universe, levels, START_CODE_PRIORITY), target, SACN_PORT)
+
+    def _send_ma2(self) -> None:
+        session = self._ma2
+        if session is None:
+            return
+        with self._lock:
+            aimed = aim_fixtures(self._cfg, self._markers, self._last, dict(self._aims))
+        if not session.connected:
+            # A new connection starts a new programmer: every light is sent again.
+            self._ma2_sent = {}
+        sent = dict(self._ma2_sent)
+        commands = ma2_commands(self._cfg, aimed, sent)
+        if commands and session.send(commands):
+            self._ma2_sent = sent
 
     def _sacn(self, cfg: DmxOutputConfig, universe: int, slots: bytes, start_code: int) -> bytes:
         return sacn_packet(

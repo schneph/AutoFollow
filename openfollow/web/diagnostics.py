@@ -957,7 +957,7 @@ _CONFIG_KEY_LINE_RE = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 # Keys whose value is a credential. Whether one is *set* is the diagnostic –
 # it separates "the operator never entered a login" from "the login is wrong" –
 # and it is the whole of the useful content, so the value never appears.
-_SECRET_CONFIG_KEYS = frozenset({"web_pin", "rtsp_user", "rtsp_password", "srt_passphrase"})
+_SECRET_CONFIG_KEYS = frozenset({"web_pin", "rtsp_user", "rtsp_password", "srt_passphrase", "ma2_password"})
 
 # Keys holding a media URI, which can carry a credential inline: RTSP userinfo
 # (``rtsp://user:pass@host/s``) and the SRT ``?passphrase=`` query.

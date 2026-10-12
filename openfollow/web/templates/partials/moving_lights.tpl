@@ -60,6 +60,14 @@
                     <span id="ml-{{fname}}-{{f.id}}-error" class="field-error"></span>
                 </div>
             % end
+                <div class="field">
+                    <label for="ml-ma2_fixture-{{f.id}}">grandMA2 Fixture ID</label>
+                    <input id="ml-ma2_fixture-{{f.id}}" type="number" name="ma2_fixture" value="{{f.ma2_fixture}}" min="0" max="99999" step="1"
+                           hx-get="/api/validate/moving_light/ma2_fixture" hx-trigger="blur changed delay:200ms"
+                           hx-target="#ml-ma2_fixture-{{f.id}}-error" hx-swap="innerHTML" hx-include="closest form"
+                           aria-describedby="ml-ma2_fixture-{{f.id}}-error" aria-invalid="false">
+                    <span id="ml-ma2_fixture-{{f.id}}-error" class="field-error"></span>
+                </div>
                 <div class="field checkbox-field">
                     <label>16-bit</label>
                     <div class="checkbox-wrap"><input type="checkbox" name="fine" {{'checked' if f.fine else ''}}></div>
