@@ -82,6 +82,13 @@ def format_length(meters: float, unit_system: UnitSystem) -> str:
     return f"{sign}{ft} ft {rem_in:.2f} in"
 
 
+def format_small_length(meters: float, unit_system: UnitSystem) -> str:
+    """A short distance such as a calibration error: ``"12 cm"`` or ``"4.7 in"``."""
+    if unit_system is UnitSystem.METRIC:
+        return f"{meters * 100.0:.0f} cm"
+    return f"{meters / _M_PER_IN:.1f} in"
+
+
 def format_length_compact(meters: float, unit_system: UnitSystem) -> str:
     """HUD compact length: fixed-width signed number, no unit suffix."""
     if unit_system is UnitSystem.METRIC:
