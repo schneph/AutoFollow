@@ -34,6 +34,7 @@ Selecting a zone opens a tabbed detail panel below the canvas.
   - `Detection (AI)` – person-detection bounding boxes drive events. Requires Person Detection enabled.
   - `Both` – either source fires events.
 - **Triggered By** – comma-separated marker IDs this zone responds to (e.g. `1, 2, 5`). Blank = any marker. Ignored when Trigger Source is Detection only.
+- **Entry Marker** – *(Person Detection's All Performers mode)* makes this an entry zone: a person who first appears with their feet inside it takes this marker, when it is free, instead of the lowest free one. Draw one at each wing or entrance and pick the marker for whoever always enters there, so each performer starts on their own marker (and their name, colour and desk patch). It outranks **Re-acquire radius**. If the marker is already in use, the person takes a free marker as usual. Works whether or not the zone sends OSC, but not while the zone is disabled. `(none)` = an ordinary trigger zone.
 
 ### Area tab
 

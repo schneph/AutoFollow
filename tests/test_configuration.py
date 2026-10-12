@@ -3563,6 +3563,15 @@ def test_trigger_zones_config_drops_legacy_default_osc_keys() -> None:
     assert not hasattr(tz, "default_osc_port")
 
 
+@pytest.mark.parametrize(
+    "raw,expected", [(-1, -1), (4, 4), (-7, -1), ("2", 2), ("wing", -1), (None, -1), (float("nan"), -1)]
+)
+def test_trigger_zone_config_coerces_performer_marker_id(raw: object, expected: int) -> None:
+    from openfollow.configuration import TriggerZoneConfig
+
+    assert TriggerZoneConfig(performer_marker_id=raw).performer_marker_id == expected  # type: ignore[arg-type]
+
+
 def test_trigger_zone_config_destination_id() -> None:
     from openfollow.configuration import TriggerZoneConfig
 
