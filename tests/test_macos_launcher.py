@@ -122,8 +122,22 @@ def test_seed_user_data_without_bundled_models_still_seeds_config(launcher, tmp_
 
 
 def test_default_config_dir_under_home(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert launcher.default_config_dir() == tmp_path / "Library" / "Application Support" / "OpenFollow"
+    assert launcher.default_config_dir() == tmp_path / "Library" / "Application Support" / "AutoFollow"
+
+
+def test_default_config_dir_on_windows_uses_appdata(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert launcher.default_config_dir() == tmp_path / "Roaming" / "AutoFollow"
+
+
+def test_default_config_dir_on_windows_without_appdata(launcher, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert launcher.default_config_dir() == tmp_path / "AppData" / "Roaming" / "AutoFollow"
 
 
 def test_resource_root_prefers_meipass(launcher, monkeypatch, tmp_path) -> None:
@@ -155,6 +169,26 @@ def test_main_routes_selfcheck(launcher, monkeypatch) -> None:
     monkeypatch.setattr(launcher, "run_gui", lambda: pytest.fail("GUI must not run for selfcheck"))
 
     assert launcher.main([]) == 0
+
+
+def test_run_selfcheck_copies_verdict_to_file(launcher, monkeypatch, tmp_path, capsys) -> None:
+    out = tmp_path / "selfcheck.txt"
+    monkeypatch.setenv("OPENFOLLOW_SELFCHECK_OUT", str(out))
+    monkeypatch.setattr(launcher, "_selfcheck", lambda: print("FAIL: missing mfvideosrc") or 1)
+
+    assert launcher.run_selfcheck() == 1
+    assert out.read_text(encoding="utf-8") == "FAIL: missing mfvideosrc\n"
+    assert capsys.readouterr().out == "FAIL: missing mfvideosrc\n"
+
+
+def test_run_selfcheck_without_file_only_prints(launcher, monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.delenv("OPENFOLLOW_SELFCHECK_OUT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(launcher, "_selfcheck", lambda: print("OK") or 0)
+
+    assert launcher.run_selfcheck() == 0
+    assert capsys.readouterr().out == "OK\n"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_main_routes_gui_by_default(launcher, monkeypatch) -> None:
@@ -265,3 +299,44 @@ def test_run_export_returns_one_on_failure(launcher, monkeypatch, tmp_path) -> N
 
     _install_fake_export(monkeypatch, _boom)
     assert launcher.run_export(["m.pt"]) == 1
+
+
+def test_check_bundled_detection_without_a_model(launcher, tmp_path) -> None:
+    assert "no detection model bundled" in launcher._check_bundled_detection(tmp_path)
+
+
+def _install_fake_dnn_backend(monkeypatch, predict) -> list[str]:
+    import openfollow.video.detection as detection_module
+
+    loaded: list[str] = []
+
+    class _Backend:
+        def __init__(self, path: str) -> None:
+            loaded.append(Path(path).name)
+
+        def predict(self, frame, confidence, max_persons, inference_size):  # noqa: ANN001, ANN201
+            return predict()
+
+    monkeypatch.setattr(detection_module, "_OpenCvDnnBackend", _Backend)
+    return loaded
+
+
+def test_check_bundled_detection_runs_the_first_model(launcher, monkeypatch, tmp_path) -> None:
+    (tmp_path / "yolo26s.onnx").write_bytes(b"s")
+    (tmp_path / "yolo26n.onnx").write_bytes(b"n")
+    loaded = _install_fake_dnn_backend(monkeypatch, lambda: [])
+
+    assert launcher._check_bundled_detection(tmp_path) is None
+    assert loaded == ["yolo26n.onnx"]
+
+
+def test_check_bundled_detection_reports_a_model_opencv_cannot_run(launcher, monkeypatch, tmp_path) -> None:
+    (tmp_path / "yolo26n.onnx").write_bytes(b"n")
+
+    def _fail() -> list[object]:
+        raise RuntimeError("unsupported layer TopK")
+
+    _install_fake_dnn_backend(monkeypatch, _fail)
+
+    problem = launcher._check_bundled_detection(tmp_path)
+    assert problem == "detection model yolo26n.onnx does not run on OpenCV DNN: unsupported layer TopK"

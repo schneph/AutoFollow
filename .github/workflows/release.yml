@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 OpenFollow Project
+# Release: a push to release/** drafts v<pyproject version>, builds every OS installer
+# onto it, and publishes it once all of them are attached.
+name: Release
+
+on:
+  push:
+    branches:
+      - "release/**"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$tag already exists; attaching to it"
+          else
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "AutoFollow $tag" --notes-file .github/release-notes.md
+          fi
+
+  macos:
+    needs: draft
+    uses: ./.github/workflows/macos.yml
+    with:
+      tag: ${{ needs.draft.outputs.tag }}
+
+  windows:
+    needs: draft
+    uses: ./.github/workflows/windows.yml
+    with:
+      tag: ${{ needs.draft.outputs.tag }}
+
+  publish:
+    needs: [draft, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ needs.draft.outputs.tag }}" -R "$GITHUB_REPOSITORY" --draft=false --latest

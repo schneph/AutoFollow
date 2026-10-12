@@ -172,6 +172,36 @@
         </div>
     </div>
 
+    <div class="group">
+        <h3 class="group-title">Projection Area</h3>
+        <div class="row">
+            <div class="field checkbox-field">
+                <label>Projection Covers the Grid</label>
+                <div class="checkbox-wrap"><input type="checkbox" name="projection_use_grid" {{'checked' if config.grid.projection_use_grid else ''}}></div>
+            </div>
+        </div>
+        % for _corner, _title in (('tl', 'Top Left'), ('tr', 'Top Right'), ('br', 'Bottom Right'), ('bl', 'Bottom Left')):
+        <div class="row">
+            % for _axis in ('x', 'y'):
+            %   _name = 'projection_%s_%s' % (_corner, _axis)
+            %   _id = 'grid-projection-%s-%s' % (_corner, _axis)
+            %   _value = getattr(config.grid, _name)
+            <div class="field">
+                <label for="{{_id}}">{{_title}} {{_axis.upper()}} ({{_len}})</label>
+                <input id="{{_id}}" type="{{'text' if _imp else 'number'}}" name="{{_name}}" value="{{format_length(_value, _us) if _imp else _value}}" step="any"
+                       hx-get="/api/validate/grid/{{_name}}" hx-trigger="blur changed delay:200ms"
+                       hx-target="#{{_id}}-error" hx-swap="innerHTML" hx-include="closest form"
+                       aria-describedby="{{_id}}-error" aria-invalid="false">
+                <span id="{{_id}}-error" class="field-error"></span>
+                % if _imp:
+                <small class="metric-echo">Stored: {{metric_echo(_value)}}</small>
+                % end
+            </div>
+            % end
+        </div>
+        % end
+    </div>
+
     <div class="actions">
         <button type="submit" class="save-btn">Save</button>
         <button type="button" class="broadcast-btn" onclick="broadcastSection('grid', this.form)">Apply to all stations</button>

@@ -43,6 +43,9 @@ from openfollow.runtime.app_commands import (
     check_controller_slot_actions as runtime_check_controller_slot_actions,
 )
 from openfollow.runtime.app_commands import (
+    check_performer_swaps as runtime_check_performer_swaps,
+)
+from openfollow.runtime.app_commands import (
     check_restart_request as runtime_check_restart_request,
 )
 from openfollow.runtime.app_commands import (
@@ -53,6 +56,9 @@ from openfollow.runtime.app_commands import (
 )
 from openfollow.runtime.app_modes import (
     adjust_move_speed as runtime_adjust_move_speed,
+)
+from openfollow.runtime.app_modes import (
+    apply_follow_commands as runtime_apply_follow_commands,
 )
 from openfollow.runtime.app_modes import (
     cancel_field_choice_picker as runtime_cancel_field_choice_picker,
@@ -192,9 +198,13 @@ from openfollow.runtime.deb_update import (
 from openfollow.runtime.deb_update import (
     run_local_update as runtime_run_local_update,
 )
+from openfollow.runtime.output_freeze import (
+    check_output_freeze as runtime_check_output_freeze,
+)
 from openfollow.services import AppRuntimeServices, WebCommandQueue
 
 if TYPE_CHECKING:
+    from openfollow.dmx import DmxOutputServer
     from openfollow.input import InputManager
     from openfollow.input.button_detection import ButtonDetectionWizard
     from openfollow.logging_setup import RingBufferLogHandler
@@ -250,7 +260,10 @@ class OpenFollowApp:
         self._server: PsnServer | None = None
         self._otp_server: OtpServer | None = None
         self._rttrpm_server: RttrpmServer | None = None
+        self._dmx_server: DmxOutputServer | None = None
         self._controlled_ids: list[int] = []
+        # Every controlled marker held where it is (see runtime.output_freeze).
+        self._outputs_frozen = False
         self._viewer_ids: list[int] = []
         self._selected_id: int | None = None
         # Assist-mode manual anchor markers, keyed by the pinned marker id.
@@ -430,13 +443,14 @@ class OpenFollowApp:
 
         # PSN is foundational: the group below registers markers on it. If PSN
         # failed (``_server`` None), skip them and surface a badge.
-        server_dependent = {"markers", "OTP output", "RTTrPM output", "OSC transmitters"}
+        server_dependent = {"markers", "OTP output", "RTTrPM output", "moving lights output", "OSC transmitters"}
         for init_fn, name in (
             (svc.init_web_server, "web server"),
             (svc.init_psn, "PSN output"),
             (svc.init_markers, "markers"),
             (svc.init_otp, "OTP output"),
             (svc.init_rttrpm, "RTTrPM output"),
+            (svc.init_dmx_output, "moving lights output"),
             (svc.init_osc_transmitters, "OSC transmitters"),
             (svc.init_psn_receiver, "PSN receiver"),
             (svc.init_zone_engine, "zone engine"),
@@ -535,6 +549,12 @@ class OpenFollowApp:
     def _check_marker_speeds_persist(self) -> None:
         runtime_check_marker_speeds_persist(self)
 
+    def _check_follow_commands(self) -> None:
+        runtime_apply_follow_commands(self)
+
+    def _check_output_freeze(self) -> None:
+        runtime_check_output_freeze(self)
+
     def _check_frame_loop_stall(self) -> None:
         runtime_check_frame_loop_stall(self)
 
@@ -556,6 +576,9 @@ class OpenFollowApp:
 
     def _check_controller_slot_actions(self) -> None:
         runtime_check_controller_slot_actions(self)
+
+    def _check_performer_swaps(self) -> None:
+        runtime_check_performer_swaps(self)
 
     def _check_camera_setup_requests(self) -> None:
         runtime_check_camera_setup_requests(self)

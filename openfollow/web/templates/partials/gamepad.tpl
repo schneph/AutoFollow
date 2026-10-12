@@ -179,7 +179,7 @@
                         % end
                     </div>
                     <div class="row">
-                        % for name in ('btn_next_marker', 'btn_prev_marker', 'btn_clear_messages'):
+                        % for name in ('btn_next_marker', 'btn_prev_marker', 'btn_clear_messages', 'btn_freeze'):
                         % include('partials/button_binding_select.tpl', name=name, label=action_labels[name], value=getattr(c, name), buttons=action_buttons)
                         % end
                     </div>

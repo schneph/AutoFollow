@@ -175,6 +175,8 @@ class ConfigWebServer:
         zone_state_provider: Callable[[], list[tuple[int, bool, int]]] | None = None,
         zone_diagnostics_provider: (Callable[[int], dict[str, Any] | None] | None) = None,
         zone_test_send: (Callable[[int, str], dict[str, Any]] | None) = None,
+        # Point a moving light by hand (pan, tilt fractions), or ``None`` to hand it back.
+        moving_light_aim: Callable[[str, tuple[float, float] | None], bool] | None = None,
         marker_positions_provider: Callable[[], list[tuple[int, float, float]]] | None = None,
         # Live per-marker move speeds (R/T + gamepad bumpers). Device-local and
         # runtime-authoritative; the section-save path overlays them onto the fresh
@@ -287,6 +289,7 @@ class ConfigWebServer:
         self._zone_state_provider = zone_state_provider
         self._zone_diagnostics_provider = zone_diagnostics_provider
         self._zone_test_send = zone_test_send
+        self._moving_light_aim = moving_light_aim
         self._marker_positions_provider = marker_positions_provider
         self._marker_move_speeds_provider = marker_move_speeds_provider
         self._full_snapshot_provider = full_snapshot_provider
@@ -839,6 +842,18 @@ class ConfigWebServer:
         """Queue a controller-slot action (``identify`` / ``forget``) for the main loop."""
         self._command_queue.request_slot_action(action, index, ref)
 
+    def request_freeze(self, frozen: bool | None) -> None:
+        """Queue a freeze (True), release (False) or toggle (None) of every output."""
+        self._command_queue.request_freeze(frozen)
+
+    def outputs_frozen(self) -> bool:
+        """Whether the outputs were frozen at the main loop's last poll."""
+        return self._command_queue.outputs_frozen()
+
+    def request_performer_swap(self, first: int, second: int) -> None:
+        """Queue a swap of two All Performers markers' people for the main loop."""
+        self._command_queue.request_performer_swap(first, second)
+
     def whats_new_pending(self) -> bool:
         """True when the page should open the updater's What's new step."""
         return self._command_queue.whats_new_pending()
@@ -913,6 +928,12 @@ class ConfigWebServer:
         if self._zone_state_provider is None:
             return []
         return self._zone_state_provider()
+
+    def aim_moving_light(self, fixture_id: str, fractions: tuple[float, float] | None) -> bool:
+        """Point a moving light by hand; False while the moving-lights output is not running."""
+        if self._moving_light_aim is None:
+            return False
+        return self._moving_light_aim(fixture_id, fractions)
 
     # Per-zone Diagnostics tab; optional providers fall back to "manager not running" shape.
     def get_zone_diagnostics(self, index: int) -> dict[str, Any] | None:

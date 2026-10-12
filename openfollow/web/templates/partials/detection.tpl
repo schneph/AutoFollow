@@ -130,6 +130,14 @@
                     </div>
                     <div class="row row--pair">
                         <div class="field">
+                            <label>Speed response</label>
+                            <input id="detection-speed-response" type="number" name="speed_response" value="{{det.speed_response}}" min="0" max="10" step="0.1"
+                                   hx-get="/api/validate/detection/speed_response" hx-trigger="blur changed delay:200ms"
+                                   hx-target="#detection-speed-response-error" hx-swap="innerHTML" hx-include="closest form"
+                                   aria-describedby="detection-speed-response-error" aria-invalid="false">
+                            <span id="detection-speed-response-error" class="field-error"></span>
+                        </div>
+                        <div class="field">
                             <label>Grace period (ms)</label>
                             <input id="detection-grace-period-ms" type="number" name="grace_period_ms" value="{{det.grace_period_ms}}" min="0" max="10000" step="100"
                                    hx-get="/api/validate/detection/grace_period_ms" hx-trigger="blur changed delay:200ms"
@@ -140,6 +148,23 @@
                     </div>
                 </div>
             </details>
+        </div>
+
+        <div class="group">
+            <h3 class="group-title">Rehearsal</h3>
+% if det.enabled and det.rehearsal_performers > 0:
+            <div class="notice warning" role="status">Rehearsal is on: every output follows simulated performers, not the stage.</div>
+% end
+            <div class="row row--pair">
+                <div class="field">
+                    <label for="detection-rehearsal-performers">Rehearsal performers</label>
+                    <input id="detection-rehearsal-performers" type="number" name="rehearsal_performers" value="{{det.rehearsal_performers}}" min="0" max="6" step="1"
+                           hx-get="/api/validate/detection/rehearsal_performers" hx-trigger="blur changed delay:200ms"
+                           hx-target="#detection-rehearsal-performers-error" hx-swap="innerHTML" hx-include="closest form"
+                           aria-describedby="detection-rehearsal-performers-error" aria-invalid="false">
+                    <span id="detection-rehearsal-performers-error" class="field-error"></span>
+                </div>
+            </div>
         </div>
 
         <div class="group group--assist" data-assist-only {{'' if tracking_state == 'assist' else 'hidden'}}>
@@ -175,7 +200,32 @@
                            aria-describedby="detection-reacquire-radius-m-error" aria-invalid="false">
                     <span id="detection-reacquire-radius-m-error" class="field-error"></span>
                 </div>
+% spot_fields = [('spotlight_marker_id', 'detection-spotlight-marker-id', 'Spotlight marker'), ('spotlight2_marker_id', 'detection-spotlight2-marker-id', 'Spotlight 2 marker'), ('spotlight3_marker_id', 'detection-spotlight3-marker-id', 'Spotlight 3 marker')]
+% for spot_index, (spot_name, spot_id, spot_label) in enumerate(spot_fields):
+%     if spot_index == 1:
             </div>
+            <div class="row row--pair">
+%     end
+                <div class="field">
+                    <label for="{{spot_id}}">{{spot_label}}</label>
+%     saved_spot = getattr(det, spot_name)
+                    <select id="{{spot_id}}" name="{{spot_name}}">
+                        <option value="-1" {{'selected' if saved_spot < 0 else ''}}>Off</option>
+%     if saved_spot >= 0 and saved_spot not in config.controlled_marker_ids:
+                        <option value="{{saved_spot}}" selected disabled>Marker {{saved_spot}} (unavailable)</option>
+%     end
+%     for marker_id in config.controlled_marker_ids:
+                        <option value="{{marker_id}}" {{'selected' if saved_spot == marker_id else ''}}>Marker {{marker_id}}</option>
+%     end
+                    </select>
+                </div>
+% end
+            </div>
+            <div id="performers-content"
+                 hx-get="/section/detection/performers"
+                 hx-trigger="load, every 1s [!this.closest('[data-multi-only]').hidden && !this.closest('.section').classList.contains('is-collapsed') && !this.querySelector('[data-swap-from]')]"
+                 hx-target="this"
+                 hx-swap="innerHTML"></div>
         </div>
 
         <div class="actions">

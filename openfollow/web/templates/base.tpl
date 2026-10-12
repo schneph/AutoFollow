@@ -3821,7 +3821,7 @@
  btn_move_z_down: 'LT', btn_move_z_up: 'RT',
  btn_toggle_zones: 'B',
  btn_next_marker: 'DPAD_RIGHT', btn_prev_marker: 'DPAD_LEFT',
- btn_clear_messages: '',
+ btn_clear_messages: '', btn_freeze: '',
  move_xy_stick: 'left', marker_fader_stick: '',
  btn_menu_confirm: 'A', btn_menu_cancel: 'B',
  };
@@ -3841,6 +3841,7 @@
  key_speed_down: 'r', key_speed_up: 't',
  key_settings: 'm', key_clear_messages: '',
  key_next_marker: 'Tab', key_prev_marker: '',
+ key_freeze: 'f',
  };
  container.querySelectorAll('select, input[type="text"]').forEach(el => {
  const def = defaults[el.name];
@@ -4354,12 +4355,14 @@
  const OSC_MARKERID_RE = /^\[markerid(?::(?:c[1-9]\d*|[1-9]\d*))?\]$/;
  const OSC_FADER_RE = /^\[fader(?::[1-9]\d*)?(?:\.inv)?(?:\.pct)?(?:\.(?:int|scale):-?\d+(?:\.\d+)?--?\d+(?:\.\d+)?)?\]$/;
  const OSC_MARKERFADER_RE = /^\[markerfader(?::(?:c[1-9]\d*|[1-9]\d*))?(?:\.inv)?(?:\.pct)?(?:\.(?:int|scale):-?\d+(?:\.\d+)?--?\d+(?:\.\d+)?)?\]$/;
+ const OSC_PROJECTION_RE = /^\[(?:u|v)(?::(?:c[1-9]\d*|[1-9]\d*))?(?:\.inv)?(?:\.pct)?(?:\.(?:int|scale):-?\d+(?:\.\d+)?--?\d+(?:\.\d+)?)?\]$/;
  const OSC_EVENT_RE = /^\[(?:value|velocity|note)\]$/;
  function oscIsRecognised(token) {
  return OSC_POSITION_RE.test(token)
  || OSC_MARKERID_RE.test(token)
  || OSC_FADER_RE.test(token)
  || OSC_MARKERFADER_RE.test(token)
+ || OSC_PROJECTION_RE.test(token)
  || OSC_EVENT_RE.test(token);
  }
  // The recognised placeholder *sources* – used only for the
@@ -4369,7 +4372,7 @@
  // truth); this fallback is for editors mounted without the partial.
  // Keep it in step with ``PLACEHOLDERS``.
  const OSC_PLACEHOLDER_NAMES_FALLBACK = new Set([
- 'x', 'y', 'z', 'markerid', 'fader', 'markerfader',
+ 'x', 'y', 'z', 'u', 'v', 'markerid', 'fader', 'markerfader',
  'value', 'velocity', 'note',
  ]);
  // client-side mirror of Python's

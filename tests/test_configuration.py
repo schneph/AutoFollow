@@ -69,6 +69,10 @@ class _DummyRuntimeServices:
         self.window_size_changes: list[tuple[int, int]] = []
         self.video_swaps: list[AppConfig] = []
         self.station_fqdn_changes: list[str] = []
+        self.dmx_changes: list[object] = []
+
+    def apply_dmx_output_change(self, new_cfg: object) -> None:
+        self.dmx_changes.append(new_cfg)
 
     def apply_station_fqdn_change(self, fqdn: str) -> None:
         self.station_fqdn_changes.append(fqdn)
@@ -2587,6 +2591,34 @@ def test_apply_runtime_routes_an_rttrpm_pin_change_to_the_live_apply() -> None:
     assert [cfg.source_iface for cfg in app._runtime_services.rttrpm_changes] == ["eth1"]
 
 
+def test_apply_runtime_routes_a_moving_lights_change_to_the_live_apply() -> None:
+    app = _DummyApp(AppConfig())
+    new_config = AppConfig()
+    new_config.dmx_output.enabled = True
+    apply_runtime_config_changes(app, new_config)
+    assert [cfg.enabled for cfg in app._runtime_services.dmx_changes] == [True]
+    assert app._config.dmx_output.enabled is True
+
+
+def test_apply_runtime_moving_lights_failure_reverts_config() -> None:
+    class _FailingRuntimeServices(_DummyRuntimeServices):
+        def apply_dmx_output_change(self, new_cfg: object) -> None:
+            raise RuntimeError("socket refused")
+
+    app = _DummyApp(AppConfig())
+    app._runtime_services = _FailingRuntimeServices()
+    new_config = AppConfig()
+    new_config.dmx_output.enabled = True
+    apply_runtime_config_changes(app, new_config)
+    assert app._config.dmx_output.enabled is False
+
+
+def test_apply_runtime_leaves_an_unchanged_moving_lights_output_alone() -> None:
+    app = _DummyApp(AppConfig())
+    apply_runtime_config_changes(app, AppConfig())
+    assert app._runtime_services.dmx_changes == []
+
+
 def test_rttrpm_output_config_rejects_non_string_host_and_falls_back() -> None:
     """Non-string ``host`` (hand-edited TOML or crafted POST) falls
     back to the default rather than raising inside ``.strip()``."""
@@ -3216,6 +3248,57 @@ def test_detection_config_clamps_reacquire_radius(bad_radius: object, expected: 
     assert cfg.reacquire_radius_m == pytest.approx(expected)
 
 
+def test_detection_config_speed_response_defaults_off() -> None:
+    assert DetectionConfig().speed_response == 0.0
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(2.5, 2.5), (-1.0, 0.0), (50.0, 10.0), ("fast", 0.0), (None, 0.0), (float("nan"), 0.0)],
+)
+def test_detection_config_clamps_speed_response(raw: object, expected: float) -> None:
+    cfg = DetectionConfig(speed_response=raw)  # type: ignore[arg-type]
+    assert cfg.speed_response == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(0, 0), (3, 3), ("6", 6), (9, 6), (-2, 0), ("many", 0), (None, 0), (True, 0)],
+)
+def test_detection_config_coerces_rehearsal_performers(raw: object, expected: int) -> None:
+    assert DetectionConfig(rehearsal_performers=raw).rehearsal_performers == expected  # type: ignore[arg-type]
+
+
+def test_detection_config_spotlight_defaults_off() -> None:
+    cfg = DetectionConfig()
+    assert (cfg.spotlight_marker_id, cfg.followed_marker_id) == (-1, -1)
+    assert (cfg.spotlight2_marker_id, cfg.followed2_marker_id, cfg.spotlight3_marker_id, cfg.followed3_marker_id) == (
+        -1,
+        -1,
+        -1,
+        -1,
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "spotlight_marker_id",
+        "followed_marker_id",
+        "spotlight2_marker_id",
+        "followed2_marker_id",
+        "spotlight3_marker_id",
+        "followed3_marker_id",
+    ],
+)
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(4, 4), ("7", 7), (-9, -1), ("lead", -1), (None, -1), (True, -1), (2.9, 2)],
+)
+def test_detection_config_coerces_spotlight_ids(field_name: str, raw: object, expected: int) -> None:
+    assert getattr(DetectionConfig(**{field_name: raw}), field_name) == expected  # type: ignore[arg-type]
+
+
 def test_detection_config_assist_strength_default() -> None:
     """Default clip strength 0.5 blends the AI-corrected output halfway
     between the manual anchor and the detected person, leaving operator
@@ -3547,6 +3630,15 @@ def test_trigger_zones_config_drops_legacy_default_osc_keys() -> None:
     tz = TriggerZonesConfig()
     assert not hasattr(tz, "default_osc_host")
     assert not hasattr(tz, "default_osc_port")
+
+
+@pytest.mark.parametrize(
+    "raw,expected", [(-1, -1), (4, 4), (-7, -1), ("2", 2), ("wing", -1), (None, -1), (float("nan"), -1)]
+)
+def test_trigger_zone_config_coerces_performer_marker_id(raw: object, expected: int) -> None:
+    from openfollow.configuration import TriggerZoneConfig
+
+    assert TriggerZoneConfig(performer_marker_id=raw).performer_marker_id == expected  # type: ignore[arg-type]
 
 
 def test_trigger_zone_config_destination_id() -> None:

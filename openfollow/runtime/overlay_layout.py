@@ -224,6 +224,9 @@ def build_help_sections(
                 keyboard.append(f"{_key_label(zones_key)}: Toggle zone overlay")
             if settings_key:
                 keyboard.append(f"{_key_label(settings_key)}: Settings menu")
+            freeze_key = kl.get("freeze", "")
+            if freeze_key:
+                keyboard.append(f"{_key_label(freeze_key)}: Freeze outputs")
         if controller_connected:
             stick = bl.get("move_xy_stick", "left")
             stick_label = "L-Stick" if stick == "left" else "R-Stick"
@@ -263,6 +266,8 @@ def build_help_sections(
                 controller.append(f"{settings_btn}: Settings menu")
             if bl.get("toggle_zones"):
                 controller.append(f"{_btn('toggle_zones', 'B')}: Toggle zone overlay")
+            if bl.get("freeze"):
+                controller.append(f"{_btn('freeze', '')}: Freeze outputs")
         if mouse_enabled:
             mouse = [
                 "Left click: Grab marker",

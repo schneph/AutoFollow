@@ -74,6 +74,9 @@ class _FakeRuntimeServices:
     def init_rttrpm(self) -> None:
         self.calls.append("init_rttrpm")
 
+    def init_dmx_output(self) -> None:
+        self.calls.append("init_dmx_output")
+
     def init_osc_transmitters(self) -> None:
         self.calls.append("init_osc_transmitters")
 
@@ -204,6 +207,7 @@ class TestRun:
             "init_markers",
             "init_otp",
             "init_rttrpm",
+            "init_dmx_output",
             "init_osc_transmitters",
             "init_psn_receiver",
             "init_zone_engine",
@@ -239,7 +243,7 @@ class TestRun:
         calls = app._runtime_services.calls
         # Foundational PSN failed → the server-dependent group is skipped.
         assert "init_psn" in calls
-        for skipped in ("init_markers", "init_otp", "init_rttrpm", "init_osc_transmitters"):
+        for skipped in ("init_markers", "init_otp", "init_rttrpm", "init_dmx_output", "init_osc_transmitters"):
             assert skipped not in calls
         # Independent inits still run.
         assert "init_psn_receiver" in calls
@@ -610,6 +614,7 @@ class TestDelegators:
             ("_check_update_request", "runtime_check_update_request", ()),
             ("_check_button_detection_request", "runtime_check_button_detection_request", ()),
             ("_check_controller_slot_actions", "runtime_check_controller_slot_actions", ()),
+            ("_check_performer_swaps", "runtime_check_performer_swaps", ()),
             ("_check_camera_setup_requests", "runtime_check_camera_setup_requests", ()),
             ("_process_source_selection_input", "runtime_process_source_selection_input", ()),
             ("_enter_source_selection", "runtime_enter_source_selection", ()),
@@ -639,6 +644,8 @@ class TestDelegators:
             ("_restart_app", "runtime_restart_app", ()),
             ("_check_config_reload", "runtime_check_config_reload", ()),
             ("_check_marker_speeds_persist", "runtime_check_marker_speeds_persist", ()),
+            ("_check_follow_commands", "runtime_apply_follow_commands", ()),
+            ("_check_output_freeze", "runtime_check_output_freeze", ()),
             ("_check_frame_loop_stall", "runtime_check_frame_loop_stall", ()),
             ("_run_frame", "runtime_run_frame", ()),
         ],

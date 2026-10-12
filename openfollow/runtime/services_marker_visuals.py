@@ -21,7 +21,7 @@ from openfollow.runtime.overlay_state import (
     OverlayState,
     VirtualFaderDisplayData,
 )
-from openfollow.runtime.services_detection_pin import is_assist_controlled
+from openfollow.runtime.services_detection_pin import is_assist_controlled, spotlights
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.runtime_metrics import OverlayStatePool
 from openfollow.station_fqdn import web_ui_host
@@ -188,6 +188,34 @@ def _resolve_marker_name(app: Any, marker_id: int) -> str:
     if entry is None:
         return ""
     return str(entry.name)
+
+
+def _marker_label(app: Any, marker_id: int) -> str:
+    return _resolve_marker_name(app, marker_id) or f"M{marker_id}"
+
+
+def _follow_tags(app: Any) -> dict[int, str]:
+    """Card tags naming each All Performers spotlight and the performer it follows.
+
+    With one spotlight the tags read ``SPOT`` / ``FOLLOWED``; with several each
+    carries its number (``SPOT 2 > Lead``, ``FOLLOWED 1+2``).
+    """
+    spots = spotlights(app)
+    spot_ids = {s.marker_id for s in spots}
+    numbered = len(spots) > 1
+    tags: dict[int, str] = {}
+    followers: dict[int, list[str]] = {}
+    for spot in spots:
+        name = f"SPOT {spot.number}" if numbered else "SPOT"
+        followed = spot.followed_marker_id
+        if followed < 0 or followed in spot_ids or followed not in app._controlled_ids:
+            tags[spot.marker_id] = name
+            continue
+        tags[spot.marker_id] = f"{name} > {_marker_label(app, followed)}"
+        followers.setdefault(followed, []).append(str(spot.number))
+    for followed, numbers in followers.items():
+        tags[followed] = f"FOLLOWED {'+'.join(numbers)}" if numbered else "FOLLOWED"
+    return tags
 
 
 def sync_marker_config(state: OverlayState, cfg: Any) -> None:
@@ -457,6 +485,7 @@ def build_marker_visual_state(
     }
     # The card an Identify has lit this frame, if any.
     flash_marker = app._input_manager.identify_flash_marker() if app._input_manager is not None else None
+    follow_tags = _follow_tags(app)
 
     state = overlay_state_pool.acquire()
 
@@ -669,6 +698,7 @@ def build_marker_visual_state(
             td.is_controlled = is_controlled
             td.name = name
             td.marker_fader = marker_fader
+            td.follow_tag = follow_tags.get(marker_id, "")
         else:
             td = MarkerOverlayData(
                 marker_id=marker_id,
@@ -685,6 +715,7 @@ def build_marker_visual_state(
                 is_controlled=is_controlled,
                 name=name,
                 marker_fader=marker_fader,
+                follow_tag=follow_tags.get(marker_id, ""),
             )
         state.markers.append(td)
         marker_idx += 1
@@ -726,10 +757,22 @@ def build_marker_visual_state(
         # operator can see which detection is driving each followspot. Assist
         # drives every controlled marker, so several boxes can be attached.
         attached_colors: dict[int, str] = {}
+        attached_labels: dict[int, str] = {}
+        followed_tracks: set[int] = set()
+        multi = dc.pin_mode == "multi"
+        followed_ids = {s.followed_marker_id for s in spotlights(app)}
         for st in app._detection_pin_states.values():
             if st.attached_track_id is not None and st.attached_marker_id is not None:
                 attached_colors[st.attached_track_id] = _resolve_marker_color(app, st.attached_marker_id)
+                if multi:
+                    # Name each performer's box after its marker so the operator
+                    # can tell who is who and pick whom the spotlight follows.
+                    attached_labels[st.attached_track_id] = _marker_label(app, st.attached_marker_id)
+                    if st.attached_marker_id in followed_ids:
+                        followed_tracks.add(st.attached_track_id)
         state.detection_attached_colors = attached_colors
+        state.detection_attached_labels = attached_labels
+        state.detection_followed_track_ids = frozenset(followed_tracks)
 
     if app._button_detection is not None:
         state.button_detection = app._button_detection.get_state()
@@ -755,6 +798,7 @@ def build_marker_visual_state(
         "next_marker": cc.btn_next_marker,
         "prev_marker": cc.btn_prev_marker,
         "settings": cc.btn_settings,
+        "freeze": cc.btn_freeze,
         "menu_confirm": cc.btn_menu_confirm,
         "menu_cancel": cc.btn_menu_cancel,
         "move_xy_stick": cc.move_xy_stick,
@@ -771,6 +815,7 @@ def build_marker_visual_state(
         "next_marker": cc.key_next_marker,
         "prev_marker": cc.key_prev_marker,
         "settings": cc.key_settings,
+        "freeze": cc.key_freeze,
     }
 
     _populate_zone_overlay(state, cfg, app)

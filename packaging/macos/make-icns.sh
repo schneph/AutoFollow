@@ -12,8 +12,8 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 SVG="$REPO/openfollow/web/static/icon.svg"
 OUT_DIR="$SCRIPT_DIR/_build"
-ICONSET="$OUT_DIR/OpenFollow.iconset"
-ICNS="$OUT_DIR/OpenFollow.icns"
+ICONSET="$OUT_DIR/AutoFollow.iconset"
+ICNS="$OUT_DIR/AutoFollow.icns"
 
 command -v rsvg-convert >/dev/null 2>&1 || {
   echo "rsvg-convert not found. Install it: brew install librsvg" >&2

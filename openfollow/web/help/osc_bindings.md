@@ -66,6 +66,7 @@ Argument types are inferred from the literal: an integer (e.g. `12`) sends as `i
 | Source | Value |
 |---|---|
 | `[x]` `[y]` `[z]` | Marker position in metres (X = stage left, Y = upstage, Z = up) |
+| `[u]` `[v]` | Where the marker lands in a projected image, 0.0–1.0 across (`u`, left to right) and down (`v`, top to bottom), through **Grid → Projection Area**. Clamped to 0–1 outside the image |
 | `[markerid]` | The resolved marker's ID as an integer |
 | `[fader]` | Default virtual-fader value, normalised 0.0–1.0 |
 | `[markerfader]` | The resolved marker's own fader value, 0.0–1.0 |
@@ -73,7 +74,7 @@ Argument types are inferred from the literal: an integer (e.g. `12`) sends as `i
 | `[velocity]` | Note velocity (0–127). Note On / Note Off transmitters only. |
 | `[note]` | MIDI note number (0–127). Note On / Note Off transmitters only. |
 
-**Index – target a specific marker or fader.** Append `:N` to override the transmitter default: `[x:2]` sends marker 2's X (works on `x` / `y` / `z` / `markerid` / `markerfader`), `[fader:3]` reads virtual fader 3. The transmitter sends from that target regardless of the Default marker / Default fader.
+**Index – target a specific marker or fader.** Append `:N` to override the transmitter default: `[x:2]` sends marker 2's X (works on `x` / `y` / `z` / `u` / `v` / `markerid` / `markerfader`), `[fader:3]` reads virtual fader 3. The transmitter sends from that target regardless of the Default marker / Default fader.
 
 **Controller reference – `:cN`.** Append `:cN` (1-based: `c1` = first controller) to address *the marker that controller `N` is currently driving*, resolved live as the operator moves. Use it to tell a console which fixture an operator is following without hard-coding a marker ID: `[markerid:c1]` sends that marker's ID, `[markerfader:c1.int:0-100]` its fader as 0–100, `[x:c1]` / `[y:c1]` / `[z:c1]` its position. Valid only on the marker-keyed sources (not `[fader]`, not event sources); `c0` is not a controller and renders as literal text. With a single controller connected, `cN` follows the currently selected marker; with several, it's that controller's fixed marker. A controller that is missing keeps its slot's marker, so those sends continue; a forgotten slot, or one that drives no marker, is skipped (shown under Diagnostics) – it never depends on the transmitter's Default marker.
 
@@ -81,13 +82,13 @@ Argument types are inferred from the literal: an integer (e.g. `12`) sends as `i
 
 | Transform | Effect | Allowed on |
 |---|---|---|
-| `.inv` | Invert – negate a position, or `1 − v` a 0.0–1.0 fader | positions, faders |
+| `.inv` | Invert – negate a position, or `1 − v` a 0.0–1.0 fader | positions, faders, `u` / `v` |
 | `.frac` | Normalise to ±1 by the grid extent | positions |
-| `.pct` | Multiply by 100 (0.0–1.0 → 0–100) | faders |
-| `.int:min-max` | Scale to an **integer** range, inclusive (`min > max` inverts) | faders |
-| `.scale:min-max` | Scale to a **float** range; bounds may be decimal and negative | faders |
+| `.pct` | Multiply by 100 (0.0–1.0 → 0–100) | faders, `u` / `v` |
+| `.int:min-max` | Scale to an **integer** range, inclusive (`min > max` inverts) | faders, `u` / `v` |
+| `.scale:min-max` | Scale to a **float** range; bounds may be decimal and negative | faders, `u` / `v` |
 
-Positions (`[x]` `[y]` `[z]`) accept `.inv` / `.frac`. Faders (`[fader]` `[markerfader]`) accept `.inv` / `.pct` / `.int` / `.scale`. `[markerid]` and the event sources take no transform. `[z.frac]` (fractional height) additionally requires **Grid → Maximum Height** to be set.
+Positions (`[x]` `[y]` `[z]`) accept `.inv` / `.frac`. `[u]` and `[v]` take the fader transforms. Faders (`[fader]` `[markerfader]`) accept `.inv` / `.pct` / `.int` / `.scale`. `[markerid]` and the event sources take no transform. `[z.frac]` (fractional height) additionally requires **Grid → Maximum Height** to be set.
 
 **Examples:**
 
@@ -99,6 +100,7 @@ Positions (`[x]` `[y]` `[z]`) accept `.inv` / `.frac`. Faders (`[fader]` `[marke
 | `[fader:3.int:0-255]` | Fader 3 scaled to a 0–255 integer |
 | `[markerfader.scale:-60-12]` | Marker fader mapped to −60 … +12 (e.g. dB) |
 | `[x:2]` | Marker 2's X position |
+| `[u:2]` `[v.inv]` | Marker 2 across the projected image; the default marker up it, 0 at the bottom |
 | `[markerid:c1]` | ID of the marker controller 1 is currently driving |
 | `[markerfader:c1.int:0-100]` | Controller 1's marker's fader, as 0–100 |
 
@@ -118,6 +120,8 @@ place.
 | `No default marker` | The message uses `[x]`-style placeholders with no marker to resolve them |
 | `Marker 9 not registered` | That `:N` reference names a marker this station doesn't control |
 | `Grid Maximum Height not set` | `[z.frac]` divides by it – set **Grid → Maximum Height** |
+
+At send time, `[u]` / `[v]` are skipped with `projection area is not a convex quadrilateral` while **Grid → Projection Area** has corners out of order or in a line, and with `marker is beyond the projection's horizon` for a marker the image could never reach.
 
 A row with no red dot can still fail at send time; the panels below are
 what show that.
@@ -142,3 +146,11 @@ The two ETC templates send the same message and differ only in which Eos user re
 - **Manage templates…** – open the template chooser to apply, delete, **Export**, or **Import** OSC output templates. Export downloads one template as a single `.oftemplate` file you can email or version-control; **Import…** loads a `.oftemplate` from another machine into your user templates. A file authored by a newer OpenFollow this build can't read is rejected with an explanation, never applied half-way.
 - **Duplicate** – copy the transmitter and insert the duplicate immediately below. Useful for a near-identical transmitter for a second marker.
 - **Delete** – permanently remove the transmitter. Requires confirmation.
+
+## Resolume and other media servers
+
+`[u]` and `[v]` place video content under a performer. Set **Grid → Projection Area** to where the projected image falls on the floor, then send the marker's place in it to the media server's position parameter.
+
+In Resolume Arena or Avenue, switch OSC input on in the preferences and note its port, then use **Shortcuts → Edit OSC** to see the address of the parameter to drive (for example a layer's Transform Position X). Put that address in this transmitter's message, followed by the placeholder: `<address> [u]` for X and `<address> [v.inv]` for Y.
+
+Resolume reads a float from 0 to 1 across the parameter's *whole* range, which for a position is usually much wider than the output. Narrow it with `.scale`: for an output edge at pixel value *p* on a parameter running from *min* to *max*, the fraction is (*p* − *min*) ÷ (*max* − *min*). With the output's left edge at fraction *a* and right edge at *b*, send `[u.scale:a-b]`. Check the direction on screen and add or remove `.inv` if the content moves the wrong way.

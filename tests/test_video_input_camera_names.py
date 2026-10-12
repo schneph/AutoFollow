@@ -82,10 +82,19 @@ def test_macos_returns_avf_names(monkeypatch: pytest.MonkeyPatch) -> None:
     assert inputs.usb_camera_names() == ["FaceTime HD"]
 
 
+def test_windows_returns_mf_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(inputs.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        "openfollow.video.inputs.mf._discover_mf_devices",
+        lambda: [{"path": "usb#a", "name": "C920"}, {"path": "usb#b", "name": ""}],
+    )
+    assert inputs.usb_camera_names() == ["C920"]
+
+
 def test_unsupported_platform_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(inputs.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(inputs.platform, "system", lambda: "FreeBSD")
     assert inputs.usb_camera_names() == []
 
 

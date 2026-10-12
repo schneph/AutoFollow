@@ -439,6 +439,18 @@ _GRID_THICKNESS_DEFAULT = 1
 _GRID_TRANSPARENCY_DEFAULT = 0.6
 
 
+_PROJECTION_CORNER_DEFAULTS = {
+    "projection_tl_x": -5.0,
+    "projection_tl_y": 6.0,
+    "projection_tr_x": 5.0,
+    "projection_tr_y": 6.0,
+    "projection_br_x": 5.0,
+    "projection_br_y": 0.0,
+    "projection_bl_x": -5.0,
+    "projection_bl_y": 0.0,
+}
+
+
 @dataclass
 class GridConfig:
     # Master show/hide for the grid overlay. Default on so existing configs
@@ -461,6 +473,17 @@ class GridConfig:
     origin_visible: bool = False
     origin_length: float = 1.0
     origin_thickness: int = 3
+    # Floor area a projector's image covers, for the ``[u]`` / ``[v]`` OSC
+    # placeholders: the grid itself, or the four corners below (PSN metres).
+    projection_use_grid: bool = True
+    projection_tl_x: float = -5.0
+    projection_tl_y: float = 6.0
+    projection_tr_x: float = 5.0
+    projection_tr_y: float = 6.0
+    projection_br_x: float = 5.0
+    projection_br_y: float = 0.0
+    projection_bl_x: float = -5.0
+    projection_bl_y: float = 0.0
 
     def __post_init__(self) -> None:
         # Dimensions/offsets reach numpy float buffers in draw_grid; appearance
@@ -487,6 +510,9 @@ class GridConfig:
         self.origin_visible = _coerce_bool(self.origin_visible, False)
         self.origin_length = _coerce_float(self.origin_length, 1.0, lo=0.1)
         self.origin_thickness = _coerce_int(self.origin_thickness, 3, lo=1, hi=20)
+        self.projection_use_grid = _coerce_bool(self.projection_use_grid, True)
+        for name, default in _PROJECTION_CORNER_DEFAULTS.items():
+            setattr(self, name, _coerce_float(getattr(self, name), default))
 
 
 # Operator Screen marker glyph; each style reads only its own fields.
@@ -601,6 +627,19 @@ class DetectionMaskConfig:
         self.vertices = cleaned
 
 
+SPOTLIGHT_COUNT = 3
+
+
+def spotlight_field(number: int) -> str:
+    """The ``DetectionConfig`` field holding spot ``number``'s marker (1-based)."""
+    return "spotlight_marker_id" if number == 1 else f"spotlight{number}_marker_id"
+
+
+def followed_field(number: int) -> str:
+    """The ``DetectionConfig`` field holding the performer marker spot ``number`` follows."""
+    return "followed_marker_id" if number == 1 else f"followed{number}_marker_id"
+
+
 @dataclass
 class DetectionConfig:
     enabled: bool = False
@@ -621,6 +660,9 @@ class DetectionConfig:
     pin_marker_id: int = -1
     pin_point: str = "top"
     smoothing: float = 0.15
+    # One-Euro speed coefficient (Hz per m/s): the smoothing cutoff rises with the
+    # marker's speed, so stillness stays steady and fast moves lag less. 0 = fixed.
+    speed_response: float = 0.0
     prediction: float = 8.0
     grace_period_ms: int = 500
     # Hybrid tracking. ``replace`` = original auto-pin (overwrite with the
@@ -636,6 +678,19 @@ class DetectionConfig:
     # Multi mode: a person entering within this distance of a marker whose
     # performer was lost resumes that marker instead of taking the lowest free one.
     reacquire_radius_m: float = 1.5
+    # Multi mode: a controlled marker that mirrors one chosen performer's marker,
+    # for a desk to follow; ``-1`` = off. It is left out of the performer pool.
+    spotlight_marker_id: int = -1
+    # Multi mode: the performer marker the spotlight mirrors; ``-1`` = none.
+    followed_marker_id: int = -1
+    # Spots 2 and 3, each its own marker following its own performer.
+    spotlight2_marker_id: int = -1
+    followed2_marker_id: int = -1
+    spotlight3_marker_id: int = -1
+    followed3_marker_id: int = -1
+    # Simulated performers walking the stage in place of detections, for testing
+    # outputs with nobody on stage; 0 = off.
+    rehearsal_performers: int = 0
     # Master on/off for region-of-interest masking. When False (default) the
     # masks below are inactive and detection runs over the whole frame even if
     # masks are drawn; True confines detection to the union of enabled masks.
@@ -664,6 +719,7 @@ class DetectionConfig:
         # ``lo=-1`` admits the "follow selected" sentinel but no other negative.
         self.pin_marker_id = _coerce_int(self.pin_marker_id, -1, lo=-1)
         self.smoothing = _coerce_float(self.smoothing, 0.15, lo=0.0, hi=1.0)
+        self.speed_response = _coerce_float(self.speed_response, 0.0, lo=0.0, hi=10.0)
         # Upper bounds mirror ``openfollow/web/validation.py``.
         self.prediction = _coerce_float(self.prediction, 8.0, lo=0.0, hi=20.0)
         self.grace_period_ms = _coerce_int(self.grace_period_ms, 500, lo=0, hi=10000)
@@ -672,6 +728,12 @@ class DetectionConfig:
         self.assist_radius_m = _coerce_float(self.assist_radius_m, 1.0, lo=0.1, hi=50.0)
         self.assist_strength = _coerce_float(self.assist_strength, 0.5, lo=0.0, hi=1.0)
         self.reacquire_radius_m = _coerce_float(self.reacquire_radius_m, 1.5, lo=0.0, hi=50.0)
+        self.spotlight_marker_id = _coerce_int(self.spotlight_marker_id, -1, lo=-1)
+        self.followed_marker_id = _coerce_int(self.followed_marker_id, -1, lo=-1)
+        for number in range(2, SPOTLIGHT_COUNT + 1):
+            for name in (spotlight_field(number), followed_field(number)):
+                setattr(self, name, _coerce_int(getattr(self, name), -1, lo=-1))
+        self.rehearsal_performers = _coerce_int(self.rehearsal_performers, 0, lo=0, hi=6)
         self.masks_enabled = _coerce_bool(self.masks_enabled, False)
         # Convert dict entries (hand-edited TOML / imported config) to
         # dataclasses and drop non-object entries, so the detector thread can
@@ -784,8 +846,12 @@ class TriggerZoneConfig:
     # selected → the zone emits nothing.
     destination_id: str = ""
     enabled: bool = True
+    # All Performers: a person who first appears inside this zone takes this
+    # marker when it is free; ``-1`` = not an entry zone.
+    performer_marker_id: int = -1
 
     def __post_init__(self) -> None:
+        self.performer_marker_id = _coerce_int(self.performer_marker_id, -1, lo=-1)
         if self.trigger_source not in VALID_TRIGGER_SOURCES:
             logger.warning(
                 "Invalid zone trigger_source %r, falling back to 'markers'",
@@ -1111,6 +1177,113 @@ class RttrpmOutputConfig:
         if not isinstance(self.source_iface, str):
             self.source_iface = ""
         self.source_iface = self.source_iface.strip()
+
+
+DMX_PROTOCOLS = ("sacn", "artnet", "ma2")
+MOVING_LIGHT_MOUNTINGS = ("hung", "floor")
+_MAX_DMX_UNIVERSE = 63999
+
+
+@dataclass
+class MovingLightConfig:
+    """One moving light aimed at a marker, its pan / tilt channels and where it hangs."""
+
+    id: str = ""
+    name: str = ""
+    enabled: bool = True
+    marker_id: int = 0
+    universe: int = 1
+    # DMX start address, and the pan / tilt channels counted from it (1 = the start address).
+    address: int = 1
+    pan_channel: int = 1
+    tilt_channel: int = 3
+    # 16-bit pan / tilt: each fine channel follows its coarse one.
+    fine: bool = True
+    pan_range: float = 540.0
+    tilt_range: float = 270.0
+    invert_pan: bool = False
+    invert_tilt: bool = False
+    mounting: str = "hung"
+    pos_x: float = 0.0
+    pos_y: float = 0.0
+    pos_z: float = 6.0
+    # Stage bearing of pan zero: 0 = upstage, 90 = stage left.
+    heading: float = 0.0
+    base_pitch: float = 0.0
+    base_roll: float = 0.0
+    # grandMA2 fixture ID, used instead of the patch over Telnet; 0 = not sent there.
+    ma2_fixture: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            self.id = _new_uuid_hex()
+        else:
+            self.id = self.id.strip()
+        self.name = _coerce_str(self.name, "").strip()[:64]
+        self.enabled = _coerce_bool(self.enabled, True)
+        self.marker_id = _coerce_int(self.marker_id, 0, lo=0)
+        self.universe = _coerce_int(self.universe, 1, lo=0, hi=_MAX_DMX_UNIVERSE)
+        self.address = _coerce_int(self.address, 1, lo=1, hi=512)
+        self.pan_channel = _coerce_int(self.pan_channel, 1, lo=1, hi=512)
+        self.tilt_channel = _coerce_int(self.tilt_channel, 3, lo=1, hi=512)
+        self.fine = _coerce_bool(self.fine, True)
+        self.pan_range = _coerce_float(self.pan_range, 540.0, lo=1.0, hi=720.0)
+        self.tilt_range = _coerce_float(self.tilt_range, 270.0, lo=1.0, hi=360.0)
+        self.invert_pan = _coerce_bool(self.invert_pan, False)
+        self.invert_tilt = _coerce_bool(self.invert_tilt, False)
+        self.mounting = _coerce_choice(self.mounting, MOVING_LIGHT_MOUNTINGS, "hung")
+        self.pos_x = _coerce_float(self.pos_x, 0.0, lo=-1000.0, hi=1000.0)
+        self.pos_y = _coerce_float(self.pos_y, 0.0, lo=-1000.0, hi=1000.0)
+        self.pos_z = _coerce_float(self.pos_z, 6.0, lo=-1000.0, hi=1000.0)
+        self.heading = _coerce_float(self.heading, 0.0, lo=-360.0, hi=360.0)
+        self.base_pitch = _coerce_float(self.base_pitch, 0.0, lo=-45.0, hi=45.0)
+        self.base_roll = _coerce_float(self.base_roll, 0.0, lo=-45.0, hi=45.0)
+        self.ma2_fixture = _coerce_int(self.ma2_fixture, 0, lo=0, hi=99999)
+
+    def channels(self) -> tuple[int, int]:
+        """The 0-based universe slots of the pan and tilt coarse channels."""
+        return self.address + self.pan_channel - 2, self.address + self.tilt_channel - 2
+
+
+@dataclass
+class DmxOutputConfig:
+    """Pan / tilt for moving lights, worked out here and sent over sACN or Art-Net."""
+
+    enabled: bool = False
+    protocol: str = "sacn"
+    # Blank: sACN multicast to each universe's group, or Art-Net broadcast.
+    host: str = ""
+    fps: int = 30
+    # sACN priority for the pan / tilt channels; every other channel is left to the desk.
+    priority: int = 150
+    ma2_port: int = 30000
+    ma2_user: str = ""
+    # Kept as typed: whitespace can be part of a password and is invisible in the field.
+    ma2_password: str = ""
+    fixtures: list[MovingLightConfig] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.enabled = _coerce_bool(self.enabled, False)
+        self.protocol = _coerce_choice(self.protocol, DMX_PROTOCOLS, "sacn")
+        self.host = _coerce_str(self.host, "").strip()
+        self.fps = _coerce_int(self.fps, 30, lo=1, hi=44)
+        self.priority = _coerce_int(self.priority, 150, lo=1, hi=200)
+        self.ma2_port = _coerce_int(self.ma2_port, 30000, lo=1, hi=65535)
+        self.ma2_user = _coerce_str(self.ma2_user, "").strip()[:64]
+        self.ma2_password = _coerce_str(self.ma2_password, "")[:64]
+        self.fixtures = [
+            MovingLightConfig(**_filter_known(MovingLightConfig, f)) if isinstance(f, dict) else f
+            for f in self.fixtures
+            if isinstance(f, (dict, MovingLightConfig))
+        ]
+        seen: set[str] = set()
+        for fixture in self.fixtures:
+            if fixture.id in seen:
+                fixture.id = _new_uuid_hex()
+            seen.add(fixture.id)
+
+    def fixture(self, fixture_id: str) -> MovingLightConfig | None:
+        return next((f for f in self.fixtures if f.id == fixture_id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -1766,6 +1939,7 @@ _BUTTON_MAPPING_FIELDS = (
     "btn_menu_confirm",
     "btn_menu_cancel",
     "btn_clear_messages",  # clear operator-message cards
+    "btn_freeze",  # hold every output where it is
     # Deprecated – superseded by btn_menu_confirm / btn_menu_cancel. Kept
     # in the mapping so legacy configs still validate and fall back to
     # defaults on invalid values; no longer used for dispatch.
@@ -1802,6 +1976,7 @@ _KEYBOARD_ACTION_FIELDS = (
     "key_prev_marker",
     "key_settings",
     "key_clear_messages",  # clear operator-message cards
+    "key_freeze",  # hold every output where it is
 )
 
 # Binding groups in form order: the fields of one group may not share an input,
@@ -1819,6 +1994,7 @@ GAMEPAD_ACTION_BUTTON_FORM_LABELS = (
     ("btn_next_marker", "Next Marker"),
     ("btn_prev_marker", "Prev Marker"),
     ("btn_clear_messages", "Clear Messages"),
+    ("btn_freeze", "Freeze Outputs"),
 )
 GAMEPAD_MENU_BUTTON_FORM_LABELS = (
     ("btn_menu_confirm", "Confirm"),
@@ -1839,6 +2015,7 @@ KEYBOARD_ACTION_FORM_LABELS = (
     ("key_clear_messages", "Clear Messages"),
     ("key_next_marker", "Next Marker"),
     ("key_prev_marker", "Prev Marker"),
+    ("key_freeze", "Freeze Outputs"),
 )
 CONTROLLER_BINDING_GROUPS = tuple(
     tuple(name for name, _ in labels)
@@ -1895,6 +2072,8 @@ class ControllerConfig:
     btn_menu_cancel: str = "B"
     # Clear all operator-message cards. Default unbound; edge-triggered.
     btn_clear_messages: str = ""
+    # Freeze / release every output. Default unbound; edge-triggered.
+    btn_freeze: str = ""
     move_xy_stick: str = "left"
     # Marker-fader integrator: which stick Y-axis (if any) drives the fader of
     # the currently-controlled marker. The bus integrates
@@ -1957,6 +2136,8 @@ class ControllerConfig:
     key_settings: str = "m"
     # Clear all operator-message cards. Default unbound.
     key_clear_messages: str = ""
+    # Freeze / release every output.
+    key_freeze: str = "f"
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -2312,6 +2493,10 @@ class AppConfig:
     avf_width: int = 1920
     avf_height: int = 1080
     avf_framerate: int = 30
+    mf_device_path: str = ""
+    mf_width: int = 1280
+    mf_height: int = 720
+    mf_framerate: int = 30
     # Media Gallery selection; see ``_DEFAULT_SELECTED_MEDIA`` above.
     testpattern_selected_media: str = _DEFAULT_SELECTED_MEDIA
 
@@ -2402,6 +2587,7 @@ class AppConfig:
     operator_messages: OperatorMessagesConfig = field(default_factory=OperatorMessagesConfig)
     otp_output: OtpOutputConfig = field(default_factory=OtpOutputConfig)
     rttrpm_output: RttrpmOutputConfig = field(default_factory=RttrpmOutputConfig)
+    dmx_output: DmxOutputConfig = field(default_factory=DmxOutputConfig)
     osc_transmitters: OscTransmittersConfig = field(default_factory=OscTransmittersConfig)
     osc_destinations: OscDestinationsConfig = field(default_factory=OscDestinationsConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
@@ -2541,6 +2727,7 @@ _SUB_CONFIG_MAP: dict[str, type] = {
     "operator_messages": OperatorMessagesConfig,
     "otp_output": OtpOutputConfig,
     "rttrpm_output": RttrpmOutputConfig,
+    "dmx_output": DmxOutputConfig,
     "osc_transmitters": OscTransmittersConfig,
     "osc_destinations": OscDestinationsConfig,
     "detection": DetectionConfig,
@@ -3504,6 +3691,15 @@ def apply_runtime_config_changes(app: OpenFollowApp, new_config: AppConfig) -> b
             ),
         ):
             app._config.rttrpm_output = old_rttrpm_output
+
+    if new_config.dmx_output != app._config.dmx_output:
+        old_dmx_output = app._config.dmx_output
+        app._config.dmx_output = new_config.dmx_output
+        if not _apply(
+            "dmx_output",
+            lambda: app._runtime_services.apply_dmx_output_change(new_config.dmx_output),
+        ):
+            app._config.dmx_output = old_dmx_output
 
     # OSC routing: transmitter rows reference a shared destination set, and the
     # zone engine resolves zone sends against the same set. A transmitter or

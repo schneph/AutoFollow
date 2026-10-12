@@ -1471,8 +1471,14 @@ def draw_marker_card(
         cr.set_source_rgb(*COLOR_TEXT)
         renderer._set_ui_font(cr, 9)
         stxt = format_speed(speed, us)
+        if t.follow_tag:
+            # The spotlight role replaces the speed line, which reads as noise
+            # on a marker the detector drives.
+            cr.set_source_rgb(*COLOR_ACCENT)
+            renderer._set_ui_font(cr, 9, bold=True)
+            stxt = renderer._truncate_text_to_width(cr, t.follow_tag, w - 16)
         # Per-marker gamepad fader appended to speed line; only when marker_fader is provisioned.
-        if t.marker_fader is not None:
+        if t.marker_fader is not None and not t.follow_tag:
             stxt = f"{stxt}   F {t.marker_fader:.2f}"
         ext = cr.text_extents(stxt)
         cr.move_to(x + (w - ext.width) / 2, y + 47)

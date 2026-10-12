@@ -27,12 +27,14 @@ from openfollow.configuration import (
     HotkeyTrigger,
     viewed_with_controlled,
 )
+from openfollow.dmx import DmxOutputServer
 from openfollow.input import InputManager
 from openfollow.input.mouse3d import idle_mouse3d_status
 from openfollow.net_adapters import display_name
 from openfollow.net_egress import Egress, is_loopback_host, resolve_egress
 from openfollow.net_utils import ResolveStatus, interface_present, plane_source_iface
 from openfollow.osc.egress import OscEgressTable
+from openfollow.osc.template import ProjectionResolver
 from openfollow.otp import OtpServer
 from openfollow.psn import MARKER_STALE_AFTER_S, PsnReceiver, PsnServer
 from openfollow.psn.server import _UNCHANGED, _Unchanged
@@ -40,9 +42,11 @@ from openfollow.rttrpm import RttrpmServer
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT
 from openfollow.runtime.network_observer import DOWN_POLLS_BEFORE_SUSPEND, NetworkPlaneObserver, Plane
 from openfollow.runtime.overlay_state import OverlayState
+from openfollow.runtime.rehearsal import RehearsalPerformers
 from openfollow.runtime.services_detection_pin import (
     apply_detection_pin as apply_detection_pin_helper,
 )
+from openfollow.runtime.services_detection_pin import performer_snapshot
 from openfollow.runtime.services_frame import (
     prepare_overlay_state_swap,
 )
@@ -55,6 +59,7 @@ from openfollow.runtime.services_marker_visuals import (
 )
 from openfollow.runtime_metrics import FrameMetrics, OverlayStatePool
 from openfollow.scene.camera import Camera
+from openfollow.scene.projection import floor_projection, projection_corners
 from openfollow.system_stats import SystemStatsCollector
 from openfollow.video.failure import ConnectionPhase, VideoFailure, failure_action, failure_sentence
 from openfollow.video.overlay import CairoOverlayRenderer
@@ -68,6 +73,7 @@ if TYPE_CHECKING:
     from openfollow.configuration import (
         AppConfig,
         DetectionConfig,
+        DmxOutputConfig,
         OscDestinationsConfig,
         OscTransmittersConfig,
         OtpOutputConfig,
@@ -240,6 +246,13 @@ class WebCommandQueue:
         # loop, which owns the slots.
         self._slot_actions_lock = threading.Lock()
         self._slot_actions: list[tuple[str, int, str]] = []
+        # Freeze requests from the web (True / False / None = toggle), and the
+        # main loop's freeze state mirrored back for the page.
+        self._freeze_lock = threading.Lock()
+        self._freeze_requests: list[bool | None] = []
+        self._outputs_frozen = False
+        self._performer_swaps_lock = threading.Lock()
+        self._performer_swaps: list[tuple[int, int]] = []
         # The web camera setup changes a Pi camera live: the main loop stops the
         # Pi Camera pipeline before an overlay is unloaded, and rebuilds it after.
         self._camera_release_requested = threading.Event()
@@ -336,6 +349,38 @@ class WebCommandQueue:
         with self._slot_actions_lock:
             actions, self._slot_actions = self._slot_actions, []
         return actions
+
+    def request_freeze(self, frozen: bool | None) -> None:
+        """Queue a freeze (True), release (False) or toggle (None) for the main loop."""
+        with self._freeze_lock:
+            self._freeze_requests.append(frozen)
+
+    def consume_freeze_requests(self) -> list[bool | None]:
+        """Take every queued freeze request, oldest first."""
+        with self._freeze_lock:
+            requests, self._freeze_requests = self._freeze_requests, []
+        return requests
+
+    def publish_outputs_frozen(self, frozen: bool) -> None:
+        """Main loop: record whether the outputs are frozen, for the web UI."""
+        with self._freeze_lock:
+            self._outputs_frozen = bool(frozen)
+
+    def outputs_frozen(self) -> bool:
+        """Whether the outputs were frozen at the main loop's last poll."""
+        with self._freeze_lock:
+            return self._outputs_frozen
+
+    def request_performer_swap(self, first: int, second: int) -> None:
+        """Queue a swap of the people two All Performers markers follow."""
+        with self._performer_swaps_lock:
+            self._performer_swaps.append((first, second))
+
+    def consume_performer_swaps(self) -> list[tuple[int, int]]:
+        """Take every queued performer swap, oldest first."""
+        with self._performer_swaps_lock:
+            swaps, self._performer_swaps = self._performer_swaps, []
+        return swaps
 
     def release_camera(self, timeout: float) -> bool:
         """Web thread: have the main loop stop the Pi Camera pipeline; ``True`` once it has.
@@ -665,6 +710,7 @@ class AppRuntimeServices:
         self._overlay_renderer: CairoOverlayRenderer | None = None  # set in init_video
         self._system_stats: SystemStatsCollector | None = None  # set in init_video
         self._person_detector: PersonDetector | None = None  # set in init_video if enabled
+        self._rehearsal = RehearsalPerformers()
 
         # Object pool for OverlayState to reduce GC pressure.
         self._overlay_state_pool = OverlayStatePool(pool_size=3)
@@ -711,6 +757,8 @@ class AppRuntimeServices:
         self._last_zone_eval: float = 0.0
         # Reused buffers for detection-to-world unprojection during zone eval
         self._zone_cam_buffer = np.zeros(7, dtype=np.float64)
+        self._projection_corners: list[tuple[float, float]] | None = None
+        self._projection: ProjectionResolver | None = None
         self._zone_screen_buffer = np.zeros((1, 2), dtype=np.float64)
 
         # Shared status flags surfaced by the operator-screen badge. A
@@ -1657,6 +1705,36 @@ class AppRuntimeServices:
                     self._app._rttrpm_server.register_marker(marker)
         self._app._rttrpm_server.start()
 
+    def init_dmx_output(self) -> None:
+        """Start the moving-lights output when it is switched on."""
+        cfg = self._app._config.dmx_output
+        if not cfg.enabled:
+            return
+        self._app._dmx_server = DmxOutputServer(
+            cfg,
+            self._marker_provider,
+            source_name=self._app._config.psn_system_name,
+        )
+        self._app._dmx_server.start()
+
+    def apply_dmx_output_change(self, new_cfg: DmxOutputConfig) -> None:
+        """Apply a ``dmx_output`` change live: start, restart with the new fixtures, or stop."""
+        server = self._app._dmx_server
+        if server is not None and new_cfg.enabled:
+            server.restart(new_cfg)
+        elif server is not None:
+            server.stop()
+            self._app._dmx_server = None
+        elif new_cfg.enabled:
+            self.init_dmx_output()
+
+    def _aim_moving_light(self, fixture_id: str, fractions: tuple[float, float] | None) -> bool:
+        server = self._app._dmx_server
+        if server is None:
+            return False
+        server.aim(fixture_id, fractions)
+        return True
+
     def init_psn_receiver(self) -> None:
         # Same resolution as ``init_psn`` so input and output land on the same
         # interface, and the same refusal: a configured station interface with
@@ -1723,6 +1801,7 @@ class AppRuntimeServices:
             egress_provider=self._osc_egress.for_destination,
             marker_provider=self._marker_provider,
             grid_provider=self._grid_provider,
+            projection_provider=self._projection_provider,
             # Fader placeholders resolve through the bus. The MIDI / fader
             # subscriptions are attached just below (after ``restart``
             # populates the row list) so an early event never arrives at
@@ -1927,6 +2006,15 @@ class AppRuntimeServices:
                 }
             )
         return out
+
+    def _projection_provider(self) -> ProjectionResolver | None:
+        """The live floor-to-image mapping for ``[u]`` / ``[v]``, rebuilt when the area changes."""
+        corners = projection_corners(self._app._config.grid)
+        if corners != self._projection_corners:
+            projection = floor_projection(corners)
+            self._projection = projection.uv if projection is not None else None
+            self._projection_corners = corners
+        return self._projection
 
     def _grid_provider(self) -> tuple[float, float, float, float]:
         """Snapshot the current grid dimensions for fractional placeholders.
@@ -2764,6 +2852,7 @@ class AppRuntimeServices:
             zone_state_provider=self._get_zone_states_snapshot,
             zone_diagnostics_provider=self._get_zone_diagnostics_snapshot,
             zone_test_send=self._zone_test_send,
+            moving_light_aim=self._aim_moving_light,
             marker_positions_provider=self._get_marker_positions_snapshot,
             # Live per-marker move speeds; the ``dict(...)`` copy is the
             # mutation-isolation boundary so the web thread never holds the live dict.
@@ -3417,7 +3506,7 @@ class AppRuntimeServices:
             self._app,
             overlay_state_pool=self._overlay_state_pool,
             system_stats=self._system_stats,
-            person_detector=self._person_detector,
+            person_detector=self._tracking_source(),
             cam_params_buffer=self._cam_params_buffer,
             dt=dt,
             network_alerts=self.network_alerts(),
@@ -3443,13 +3532,28 @@ class AppRuntimeServices:
         ``dt`` (seconds since the previous animate frame) keeps the smoothing /
         prediction frame-rate-independent.
         """
+        count = self._rehearsal_count()
+        if count:
+            self._rehearsal.update(self._app, count)
+        self._status_flags["rehearsal"] = (
+            ("caution", f"Rehearsal: {count} simulated performer{'s' if count != 1 else ''}") if count else None
+        )
         apply_detection_pin_helper(
             self._app,
-            person_detector=self._person_detector,
+            person_detector=self._tracking_source(),
             unproject_cam_buffer=self._unproject_cam_buffer,
             screen_point_buffer=self._screen_point_buffer,
             dt=dt,
         )
+
+    def _rehearsal_count(self) -> int:
+        """Simulated performers standing in for detections; 0 unless detection is on."""
+        det = self._app._config.detection
+        return int(det.rehearsal_performers) if det.enabled else 0
+
+    def _tracking_source(self) -> Any:
+        """What tracking reads people from: the rehearsal performers while they are on, else the detector."""
+        return self._rehearsal if self._rehearsal_count() else self._person_detector
 
     def init_zone_engine(self) -> None:
         """Create the zone engine from config, wired to the shared OSC service."""
@@ -3517,7 +3621,7 @@ class AppRuntimeServices:
     def _collect_detection_positions(self) -> list[tuple[tuple[str, int], float, float]]:
         """World-XY foot positions of every visible AI detection."""
         app = self._app
-        detector = self._person_detector
+        detector = self._tracking_source()
         if detector is None:
             return []
         detections = detector.detections
@@ -3778,6 +3882,7 @@ class AppRuntimeServices:
                 "tracked_people": 0,
                 "pinned_track_id": None,
                 "pin_status": None,
+                "all_performers": None,
                 "last_inference_age_ms": None,
                 "missing_deps": [],
             },
@@ -3962,6 +4067,10 @@ class AppRuntimeServices:
         if self._person_detector is not None:
             detection_snapshot = dict(self._person_detector.performance_stats)
         detection_snapshot["pin_status"] = self._detection_pin_status()
+        detection_snapshot["rehearsal_performers"] = self._rehearsal_count()
+        detection_snapshot["all_performers"] = (
+            performer_snapshot(self._app) if cfg.detection.enabled and cfg.detection.pin_mode == "multi" else None
+        )
         detection_snapshot["missing_deps"] = self._resolve_detection_missing_deps(
             cfg.detection,
             now_monotonic,
@@ -4080,6 +4189,8 @@ class AppRuntimeServices:
             self._safe_stop("OTP server", app._otp_server.stop)
         if app._rttrpm_server is not None:
             self._safe_stop("RTTrPM server", app._rttrpm_server.stop)
+        if app._dmx_server is not None:
+            self._safe_stop("moving lights output", app._dmx_server.stop)
         if app._server is not None:
             self._safe_stop("PSN server", app._server.stop)
         if app._psn_receiver is not None:

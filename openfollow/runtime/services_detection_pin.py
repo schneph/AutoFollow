@@ -4,18 +4,24 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
 
+from openfollow.configuration import SPOTLIGHT_COUNT, followed_field, spotlight_field
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT, dt_steps, ema_factor
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.scene.solver import invert_overlay_distortion, unproject_to_plane
+from openfollow.zones.geometry import point_in_polygon
 
 if TYPE_CHECKING:
     from openfollow.psn.marker import Marker
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,6 +55,10 @@ class DetectionPinState:
     # Multi mode: the marker's person was lost, so a newcomer near where they
     # left resumes this marker. Cleared when the marker is driven again.
     lost: bool = False
+    # Spotlight marker: the performer marker it last mirrored, and whether it is
+    # still gliding onto that performer after a switch or a re-acquire.
+    spot_target_id: int | None = None
+    spot_gliding: bool = False
 
     def reset(self) -> None:
         """Clear smoothing/velocity so the next acquisition re-seeds fresh.
@@ -68,6 +78,8 @@ class DetectionPinState:
         self.attached_track_id = None
         self.attached_marker_id = None
         self.lost = False
+        self.spot_target_id = None
+        self.spot_gliding = False
 
     def soft_release(self) -> None:
         """Drop the person lock + velocity but keep the outer glide.
@@ -213,6 +225,26 @@ def _load_camera_params(app: Any, buffer: npt.NDArray[Any]) -> npt.NDArray[Any]:
     return buffer
 
 
+def adaptive_alpha(smoothing: float, speed_response: float, speed_mps: float) -> float:
+    """One-Euro filter cutoff as a per-nominal-frame EMA alpha.
+
+    ``smoothing`` is the alpha at rest; the cutoff frequency then rises by
+    ``speed_response`` Hz per m/s, so a still performer stays steady and a fast
+    one is followed with little lag. ``speed_response <= 0`` returns ``smoothing``.
+    """
+    if speed_response <= 0.0 or smoothing >= 1.0:
+        return smoothing
+    # alpha = k / (1 + k) with k = 2*pi*cutoff*Te, so the rest cutoff is a / (1 - a).
+    k = smoothing / (1.0 - smoothing) + 2.0 * math.pi * NOMINAL_FRAME_DT * speed_response * speed_mps
+    return k / (1.0 + k)
+
+
+def _smoothing_alpha(cfg: Any, pin_state: DetectionPinState) -> float:
+    """The marker's per-nominal-frame alpha at its current estimated speed."""
+    speed_mps = math.hypot(pin_state.vel_x, pin_state.vel_y) / NOMINAL_FRAME_DT
+    return adaptive_alpha(cfg.detection.smoothing, cfg.detection.speed_response, speed_mps)
+
+
 def _advance_smoothing(
     pin_state: DetectionPinState,
     target_x: float,
@@ -220,7 +252,7 @@ def _advance_smoothing(
     cfg: Any,
     dt: float = NOMINAL_FRAME_DT,
 ) -> tuple[float, float]:
-    """Velocity-EMA + prediction lookahead + EMA smoothing of a world target.
+    """Velocity-EMA + prediction lookahead + adaptive EMA smoothing of a world target.
 
     Mutates ``pin_state`` and returns the smoothed ``(x, y)``. Shared by both pin
     modes so the filter stays identical; tune it once, here. ``dt`` (seconds since
@@ -256,7 +288,7 @@ def _advance_smoothing_steps(
     predicted_x = target_x + pin_state.vel_x * prediction
     predicted_y = target_y + pin_state.vel_y * prediction
 
-    alpha = ema_factor(cfg.detection.smoothing, steps)
+    alpha = ema_factor(_smoothing_alpha(cfg, pin_state), steps)
     if pin_state.smooth_x is None or pin_state.smooth_y is None:
         pin_state.smooth_x = predicted_x
         pin_state.smooth_y = predicted_y
@@ -545,7 +577,7 @@ def _assist_one(
     # Outer glide: ease the AI marker toward this frame's target. Seeded once
     # from the registered marker's pos; never reset → the output never snaps. The
     # glide rate is frame-rate-independent (re-derived from the shared ``steps``).
-    glide = ema_factor(cfg.detection.smoothing, steps)
+    glide = ema_factor(_smoothing_alpha(cfg, state), steps)
     if state.ai_smooth_x is None or state.ai_smooth_y is None:
         out_x, out_y, _ = out_marker.pos
         state.ai_smooth_x = out_x
@@ -561,6 +593,183 @@ def _assist_one(
     state.attached_marker_id = marker_id
 
 
+# Spotlight glide onto a newly followed performer: per-nominal-frame ease, and
+# the distance (m) at which it locks on and tracks exactly.
+_SPOT_GLIDE = 0.2
+_SPOT_LOCK_M = 0.05
+
+
+@dataclass(frozen=True)
+class Spotlight:
+    """One configured All Performers spotlight: its number (1-based), marker, and followed performer."""
+
+    number: int
+    marker_id: int
+    followed_marker_id: int
+
+
+def spotlights(app: Any) -> list[Spotlight]:
+    """Every configured, controlled spotlight in number order; a marker named twice counts once."""
+    det = app._config.detection
+    if not det.enabled or det.pin_mode != "multi":
+        return []
+    out: list[Spotlight] = []
+    for number in range(1, SPOTLIGHT_COUNT + 1):
+        spot = int(getattr(det, spotlight_field(number)))
+        if spot < 0 or spot not in app._controlled_ids or any(s.marker_id == spot for s in out):
+            continue
+        out.append(Spotlight(number, spot, int(getattr(det, followed_field(number)))))
+    return out
+
+
+def spotlight_marker_id(app: Any) -> int | None:
+    """Spot 1's marker when it is configured and controlled, else None."""
+    first = next((s for s in spotlights(app) if s.number == 1), None)
+    return first.marker_id if first is not None else None
+
+
+def performer_marker_ids(app: Any) -> list[int]:
+    """The All Performers pool: every registered controlled marker but the spotlights."""
+    spots = {s.marker_id for s in spotlights(app)}
+    return sorted(mid for mid in app._controlled_ids if mid not in spots and app._server.get_marker(mid) is not None)
+
+
+def is_tracking_performer(app: Any, marker_id: int) -> bool:
+    """True when ``marker_id`` currently holds a performer in All Performers mode."""
+    state = app._detection_pin_states.get(marker_id)
+    return state is not None and state.locked_track_id is not None
+
+
+def performer_snapshot(app: Any) -> dict[str, Any]:
+    """All Performers state for /api/stats: the spotlights and every performer marker.
+
+    ``spotlight_marker_id`` / ``followed_marker_id`` are spot 1's, kept beside
+    the full ``spotlights`` list for readers that predate spots 2 and 3.
+    """
+    spots = spotlights(app)
+    first = next((s for s in spots if s.number == 1), None)
+    followed_by: dict[int, list[int]] = {}
+    for spot in spots:
+        followed_by.setdefault(spot.followed_marker_id, []).append(spot.number)
+    return {
+        "spotlight_marker_id": first.marker_id if first is not None else None,
+        "followed_marker_id": first.followed_marker_id if first is not None and first.followed_marker_id >= 0 else None,
+        "spotlights": [
+            {
+                "number": s.number,
+                "marker_id": s.marker_id,
+                "followed_marker_id": s.followed_marker_id if s.followed_marker_id >= 0 else None,
+            }
+            for s in spots
+        ],
+        "performers": [
+            {
+                "marker_id": mid,
+                "tracking": is_tracking_performer(app, mid),
+                "followed": mid in followed_by,
+                "followed_by": followed_by.get(mid, []),
+            }
+            for mid in performer_marker_ids(app)
+        ],
+    }
+
+
+def cycle_followed_performer(app: Any, direction: int) -> bool:
+    """Move spot 1 to the next (+1) or previous (-1) tracked performer.
+
+    Only performers holding a person are offered; with none tracked, every
+    performer marker is. Returns False when spot 1 is not set up, so the
+    caller falls back to ordinary marker selection.
+    """
+    if spotlight_marker_id(app) is None:
+        return False
+    pool = performer_marker_ids(app)
+    candidates = [mid for mid in pool if is_tracking_performer(app, mid)] or pool
+    if not candidates:
+        return True
+    current = app._config.detection.followed_marker_id
+    if current in candidates:
+        idx = candidates.index(current) + (1 if direction > 0 else -1)
+    else:
+        idx = 0 if direction > 0 else -1
+    app._config.detection.followed_marker_id = candidates[idx % len(candidates)]
+    return True
+
+
+def follow_performer(app: Any, marker_id: int) -> bool:
+    """Point the spotlight at performer marker ``marker_id``, or at nobody when negative.
+
+    Returns True when the followed performer changed. A marker outside the
+    performer pool, or no spotlight set up, changes nothing.
+    """
+    if spotlight_marker_id(app) is None:
+        return False
+    if marker_id >= 0 and marker_id not in performer_marker_ids(app):
+        return False
+    target = max(marker_id, -1)
+    det = app._config.detection
+    if det.followed_marker_id == target:
+        return False
+    det.followed_marker_id = target
+    return True
+
+
+def swap_performers(app: Any, first: int, second: int) -> bool:
+    """Swap the people two All Performers markers follow, for a tracker that mixed them up.
+
+    Each marker takes over the other's person, smoothing and status, so it
+    jumps to that person on the next frame. The spotlight keeps its marker, so
+    it moves to whoever that marker now holds. Returns False outside All
+    Performers or when either id is not a performer marker (or they are the
+    same), changing nothing.
+    """
+    det = app._config.detection
+    pool = performer_marker_ids(app)
+    if not det.enabled or det.pin_mode != "multi" or first == second or first not in pool or second not in pool:
+        return False
+    states = app._detection_pin_states
+    a, b = _get_pin_state(app, first), _get_pin_state(app, second)
+    states[first], states[second] = b, a
+    for mid, state in ((first, b), (second, a)):
+        if state.attached_marker_id is not None:
+            state.attached_marker_id = mid
+    logger.info("Swapped the performers on markers %d and %d.", first, second)
+    return True
+
+
+def _drive_spotlight(app: Any, spot: Spotlight, pool: list[int], steps: float) -> None:
+    """Mirror the followed performer's marker onto the spotlight marker.
+
+    It glides onto a performer it was not on last frame (a switch, or the
+    performer re-acquired), then tracks exactly. With no tracked performer to
+    follow it holds where it is at status 0.0.
+    """
+    marker = app._server.get_marker(spot.marker_id)
+    state = _get_pin_state(app, spot.marker_id)
+    followed = spot.followed_marker_id
+    target_state = app._detection_pin_states.get(followed) if followed in pool else None
+    if target_state is None or target_state.attached_marker_id != followed:
+        state.spot_target_id = None
+        _write_status(marker, state, 0.0)
+        return
+    tx, ty, tz = app._server.get_marker(followed).pos
+    if state.spot_target_id != followed:
+        state.spot_target_id = followed
+        state.spot_gliding = True
+    if state.spot_gliding:
+        sx, sy, _ = marker.pos
+        ease = ema_factor(_SPOT_GLIDE, steps)
+        sx += ease * (tx - sx)
+        sy += ease * (ty - sy)
+        if (tx - sx) ** 2 + (ty - sy) ** 2 <= _SPOT_LOCK_M**2:
+            state.spot_gliding = False
+            sx, sy = tx, ty
+        tx, ty = sx, sy
+    status = 1.0 if target_state.status is None else target_state.status
+    marker.set_pos(tx, ty, tz, status=status)
+    state.status = status
+
+
 def _apply_multi_all(
     app: Any,
     *,
@@ -573,15 +782,16 @@ def _apply_multi_all(
 
     A marker keeps its person for as long as the detector hands out that track
     (it coasts through brief occlusions). A confident new track takes the free
-    marker that lost its person nearest to it within ``reacquire_radius_m``,
-    else the lowest free id; with no free marker it waits. A marker whose track
+    marker of the entry zone it appears in, else the free marker that lost its
+    person nearest to it within ``reacquire_radius_m``, else the lowest free
+    id; with no free marker it waits. A marker whose track
     ends holds its position at status 0.0 and is free again.
     """
     cfg = app._config
-    pool = sorted(mid for mid in app._controlled_ids if app._server.get_marker(mid) is not None)
-    _prune_pin_states(app, keep=set(pool))
-    if not pool:
-        return
+    pool = performer_marker_ids(app)
+    spots = [s for s in spotlights(app) if app._server.get_marker(s.marker_id) is not None]
+    _prune_pin_states(app, keep=set(pool) | {s.marker_id for s in spots})
+    steps = dt_steps(dt)
 
     w, h = app._video_receiver.resolution
     if person_detector is None or not person_detector.available or w <= 0 or h <= 0:
@@ -590,6 +800,8 @@ def _apply_multi_all(
             state = _get_pin_state(app, mid)
             state.reset()
             _write_status(app._server.get_marker(mid), state, 0.0)
+        for spot in spots:
+            _drive_spotlight(app, spot, pool, steps)
         return
 
     use_bottom = cfg.detection.pin_point == "bottom"
@@ -614,6 +826,28 @@ def _apply_multi_all(
     def _plane_z(marker: Any) -> float:
         return float(cfg.grid.z_offset) if use_bottom else float(marker.pos[2])
 
+    entry_zones = [
+        (z.performer_marker_id, z.vertices)
+        for z in cfg.trigger_zones.zones
+        if z.enabled and z.performer_marker_id in pool and len(z.vertices) >= 3
+    ]
+
+    def _entry_marker(track_id: int, free: list[int]) -> int | None:
+        """The free marker of the first entry zone the person's feet stand in."""
+        if not entry_zones:
+            return None
+        box = boxes[track_id]
+        screen_pt[0, 0] = (box.x1 + box.x2) / 2.0 * w
+        screen_pt[0, 1] = box.y2 * h
+        undistorted = invert_overlay_distortion(screen_pt, float(w), float(h), cfg.camera.lens_k1, cfg.camera.lens_k2)
+        feet = unproject_to_plane(params, undistorted, float(w), float(h), float(cfg.grid.z_offset))[0]
+        if not np.all(np.isfinite(feet)):
+            return None
+        for marker_id, vertices in entry_zones:
+            if marker_id in free and point_in_polygon(float(feet[0]), float(feet[1]), vertices):
+                return int(marker_id)
+        return None
+
     states = {mid: _get_pin_state(app, mid) for mid in pool}
     for state in states.values():
         if state.locked_track_id is not None and state.locked_track_id not in boxes:
@@ -631,9 +865,9 @@ def _apply_multi_all(
         free = [mid for mid in pool if states[mid].locked_track_id is None]
         if not free:
             break
-        chosen: int | None = None
+        chosen = _entry_marker(box.track_id, free)
         best_dsq = reacquire_sq
-        for mid in free:
+        for mid in free if chosen is None else ():
             if not states[mid].lost:
                 continue
             marker = app._server.get_marker(mid)
@@ -650,7 +884,6 @@ def _apply_multi_all(
         state.reset()
         state.locked_track_id = box.track_id
 
-    steps = dt_steps(dt)
     coast_s = person_detector.coast_s
     for mid in pool:
         state = states[mid]
@@ -671,6 +904,9 @@ def _apply_multi_all(
         status = detection_status(box.confidence, threshold, age_s=box.age_s, grace_s=coast_s)
         marker.set_pos(smooth_x, smooth_y, marker.pos[2], status=status)
         state.status = status
+
+    for spot in spots:
+        _drive_spotlight(app, spot, pool, steps)
 
 
 def _prune_manual_markers(app: Any, *, keep: set[int]) -> None:

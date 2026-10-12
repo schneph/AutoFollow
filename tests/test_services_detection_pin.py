@@ -21,7 +21,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openfollow.configuration import CameraConfig, DetectionConfig, GridConfig
+from openfollow.configuration import (
+    CameraConfig,
+    DetectionConfig,
+    GridConfig,
+    TriggerZoneConfig,
+    TriggerZonesConfig,
+)
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT
 from openfollow.runtime.services_detection_pin import (
     DetectionPinState,
@@ -29,11 +35,19 @@ from openfollow.runtime.services_detection_pin import (
     _get_pin_state,
     _prune_manual_markers,
     _prune_pin_states,
+    adaptive_alpha,
     apply_detection_pin,
     assist_active,
+    cycle_followed_performer,
     detection_status,
+    follow_performer,
     get_or_create_manual_marker,
     is_assist_controlled,
+    is_tracking_performer,
+    performer_marker_ids,
+    performer_snapshot,
+    spotlights,
+    swap_performers,
 )
 
 pytestmark = pytest.mark.unit
@@ -151,7 +165,9 @@ def _make_app(
         marker = marker or _StubMarker()
         server = _StubServer(marker)
     return SimpleNamespace(
-        _config=SimpleNamespace(detection=detection_cfg, grid=grid, camera=CameraConfig()),
+        _config=SimpleNamespace(
+            detection=detection_cfg, grid=grid, camera=CameraConfig(), trigger_zones=TriggerZonesConfig()
+        ),
         _video_receiver=_StubVideoReceiver(resolution),
         _camera=_StubCamera(),
         _server=server,
@@ -1863,3 +1879,528 @@ def test_multi_top_pin_point_unprojects_on_each_markers_height(monkeypatch) -> N
 
     assert planes == [pytest.approx(1.7)]
     assert app._server.get_marker(1).pos[2] == pytest.approx(1.7)
+
+
+# ---------------------------------------------------------------------------
+# All Performers spotlight – one controlled marker mirrors the performer the
+# operator chose to follow. Glide ease 0.2 per nominal frame, lock at 5 cm.
+# ---------------------------------------------------------------------------
+
+
+def _spot_app(ids: tuple[int, ...] = (1, 2, 3), *, spot: int = 3, followed: int = -1, **cfg) -> SimpleNamespace:  # noqa: ANN003
+    return _multi_app(ids, spotlight_marker_id=spot, followed_marker_id=followed, **cfg)
+
+
+def test_spotlight_is_left_out_of_the_performer_pool(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.5, 20), _det(0.8, 30)], monkeypatch)
+
+    assert {_track(app, 1), _track(app, 2)} == {10, 20}
+    assert _track(app, 3) is None
+    assert app._server.get_marker(3).status == 0.0
+
+
+def test_spotlight_glides_onto_the_followed_performer_then_tracks_exactly(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(0.4)
+    assert app._server.get_marker(3).status == pytest.approx(app._server.get_marker(1).status)
+
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 3) == 2.0
+    _run_multi(app, [_det(0.3, 10)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(3.0)
+
+
+def test_switching_the_followed_performer_glides_instead_of_jumping(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    app._config.detection.followed_marker_id = _track_owner(app, 20)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+
+    assert _x(app, 3) == pytest.approx(2.0 + 0.2 * 5.0)
+
+
+def test_spotlight_holds_invalid_while_the_followed_performer_has_nobody(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    _run_multi(app, [], monkeypatch)
+
+    assert _x(app, 3) == 2.0
+    assert app._server.get_marker(3).status == 0.0
+    # The performer coming back is a re-acquire, so the spotlight glides again.
+    _run_multi(app, [_det(0.6, 11)], monkeypatch)
+    assert _x(app, 3) == pytest.approx(2.0 + 0.2 * 4.0)
+
+
+@pytest.mark.parametrize("followed", [-1, 3, 9], ids=["none", "itself", "not-a-performer"])
+def test_spotlight_without_a_performer_to_follow_vouches_for_nothing(monkeypatch, followed: int) -> None:
+    app = _spot_app(followed=followed)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+
+    assert _x(app, 3) == 0.0
+    assert app._server.get_marker(3).status == 0.0
+
+
+def test_spotlight_with_no_detector_vouches_for_nothing() -> None:
+    app = _spot_app(followed=1)
+    _run(app, None)
+    assert app._server.get_marker(3).status == 0.0
+
+
+@pytest.mark.parametrize("spot", [-1, 7], ids=["off", "not-controlled"])
+def test_without_a_spotlight_every_controlled_marker_is_a_performer(monkeypatch, spot: int) -> None:
+    app = _spot_app(spot=spot, followed=1)
+    _run_multi(app, [_det(0.2, 10), _det(0.5, 20), _det(0.8, 30)], monkeypatch)
+    assert {_track(app, mid) for mid in (1, 2, 3)} == {10, 20, 30}
+
+
+def test_spotlight_turned_off_gets_full_validity_back(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    _run_multi(app, [], monkeypatch)
+    assert app._server.get_marker(3).status == 0.0
+    app._config.detection.spotlight_marker_id = -1
+    app._controlled_ids = [1, 2]
+    _run_multi(app, [], monkeypatch)
+    assert app._server.get_marker(3).status == 1.0
+
+
+def test_spotlight_marker_not_registered_is_skipped(monkeypatch) -> None:
+    app = _spot_app(followed=1)
+    del app._server._by_id[3]
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert 3 not in app._detection_pin_states
+
+
+def test_cycle_moves_the_spotlight_between_tracked_performers_only(monkeypatch) -> None:
+    app = _spot_app((1, 2, 3, 4), spot=4)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    det = app._config.detection
+
+    assert cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 1
+    cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 2
+    cycle_followed_performer(app, +1)
+    assert det.followed_marker_id == 1
+    cycle_followed_performer(app, -1)
+    assert det.followed_marker_id == 2
+
+
+def test_cycle_backwards_from_nobody_lands_on_the_last_performer(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    cycle_followed_performer(app, -1)
+    assert app._config.detection.followed_marker_id == 2
+
+
+def test_cycle_with_nobody_tracked_offers_every_performer(monkeypatch) -> None:
+    app = _spot_app()
+    _run_multi(app, [], monkeypatch)
+    cycle_followed_performer(app, +1)
+    assert app._config.detection.followed_marker_id == 1
+
+
+def test_cycle_with_no_performer_markers_changes_nothing(monkeypatch) -> None:
+    app = _spot_app(ids=(3,))
+    assert cycle_followed_performer(app, +1)
+    assert app._config.detection.followed_marker_id == -1
+
+
+@pytest.mark.parametrize("cfg", [{"spot": -1}, {"pin_mode": "assist"}, {"enabled": False}])
+def test_cycle_is_not_handled_without_a_spotlight(cfg) -> None:  # noqa: ANN001
+    app = _spot_app(**cfg)
+    assert not cycle_followed_performer(app, +1)
+
+
+@pytest.mark.parametrize("target", [1, 2])
+def test_follow_points_the_spotlight_at_a_performer_marker(target: int) -> None:
+    app = _spot_app()
+    assert follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == target
+
+
+def test_follow_a_performer_who_is_not_tracked_is_still_accepted() -> None:
+    # A desk may cue the spotlight before the performer walks on.
+    app = _spot_app()
+    assert follow_performer(app, 2)
+    assert not is_tracking_performer(app, 2)
+
+
+@pytest.mark.parametrize("target", [-1, -7])
+def test_follow_a_negative_id_follows_nobody(target: int) -> None:
+    app = _spot_app(followed=1)
+    assert follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == -1
+
+
+@pytest.mark.parametrize("target", [3, 9], ids=["the-spotlight-itself", "not-a-performer"])
+def test_follow_a_marker_outside_the_performer_pool_changes_nothing(target: int) -> None:
+    app = _spot_app(followed=1)
+    assert not follow_performer(app, target)
+    assert app._config.detection.followed_marker_id == 1
+
+
+@pytest.mark.parametrize("followed,target", [(1, 1), (-1, -1)])
+def test_follow_the_current_choice_reports_no_change(followed: int, target: int) -> None:
+    app = _spot_app(followed=followed)
+    assert not follow_performer(app, target)
+
+
+@pytest.mark.parametrize("cfg", [{"spot": -1}, {"pin_mode": "assist"}, {"enabled": False}])
+def test_follow_without_a_spotlight_changes_nothing(cfg) -> None:  # noqa: ANN001
+    app = _spot_app(**cfg)
+    assert not follow_performer(app, 1)
+    assert app._config.detection.followed_marker_id == -1
+
+
+def test_performer_snapshot_names_the_spotlight_and_each_performer(monkeypatch) -> None:
+    app = _spot_app(followed=2)
+    _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert performer_snapshot(app) == {
+        "spotlight_marker_id": 3,
+        "followed_marker_id": 2,
+        "spotlights": [{"number": 1, "marker_id": 3, "followed_marker_id": 2}],
+        "performers": [
+            {"marker_id": 1, "tracking": True, "followed": False, "followed_by": []},
+            {"marker_id": 2, "tracking": False, "followed": True, "followed_by": [1]},
+        ],
+    }
+
+
+def test_performer_snapshot_without_a_spotlight_follows_nobody() -> None:
+    app = _spot_app(spot=-1, followed=2)
+    snap = performer_snapshot(app)
+    assert snap["spotlight_marker_id"] is None
+    assert snap["followed_marker_id"] is None
+    assert [p["followed"] for p in snap["performers"]] == [False, False, False]
+
+
+# ---------------------------------------------------------------------------
+# Speed response (One-Euro adaptive smoothing)
+# ---------------------------------------------------------------------------
+
+
+def _one_euro_alpha(rest_alpha: float, beta: float, speed: float) -> float:
+    """Textbook One-Euro: alpha = 1 / (1 + tau / Te), tau = 1 / (2 pi fc)."""
+    te = NOMINAL_FRAME_DT
+    fc_min = rest_alpha / (1.0 - rest_alpha) / (2.0 * np.pi * te)
+    fc = fc_min + beta * speed
+    return 1.0 / (1.0 + 1.0 / (2.0 * np.pi * fc * te))
+
+
+@pytest.mark.parametrize("speed", [0.0, 0.5, 2.0, 8.0])
+def test_adaptive_alpha_without_speed_response_is_the_smoothing(speed: float) -> None:
+    assert adaptive_alpha(0.15, 0.0, speed) == pytest.approx(0.15)
+
+
+def test_adaptive_alpha_at_rest_is_the_smoothing() -> None:
+    assert adaptive_alpha(0.15, 3.0, 0.0) == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.5, 4.0])
+@pytest.mark.parametrize("beta", [0.5, 2.0, 10.0])
+def test_adaptive_alpha_follows_the_one_euro_cutoff(beta: float, speed: float) -> None:
+    assert adaptive_alpha(0.15, beta, speed) == pytest.approx(_one_euro_alpha(0.15, beta, speed))
+
+
+def test_adaptive_alpha_rises_with_speed_and_stays_below_one() -> None:
+    alphas = [adaptive_alpha(0.15, 2.0, v) for v in (0.0, 0.5, 1.0, 3.0, 10.0, 1000.0)]
+    assert alphas == sorted(alphas)
+    assert len(set(alphas)) == len(alphas)
+    assert alphas[-1] < 1.0
+
+
+def test_adaptive_alpha_with_no_smoothing_stays_instant() -> None:
+    assert adaptive_alpha(1.0, 5.0, 3.0) == pytest.approx(1.0)
+
+
+def _replace_lag(monkeypatch, speed_response: float, step_m: float) -> float:  # noqa: ANN001
+    """Distance the replace-mode marker trails a target moving ``step_m`` per frame."""
+    app = _make_app(detection_cfg=_replace_cfg(smoothing=0.15, speed_response=speed_response))
+    detector = _StubDetector(_StubDetection(0.4, 0.4, 0.6, 0.6))
+    marker = app._server.get_marker(0)
+    frames = 60
+    xs = iter([np.array([[i * step_m, 0.0, 0.0]]) for i in range(frames)])
+
+    import openfollow.runtime.services_detection_pin as module
+
+    monkeypatch.setattr(module, "unproject_to_plane", lambda *_a, **_k: next(xs))
+    for _ in range(frames):
+        _run(app, detector)
+    return (frames - 1) * step_m - marker.pos[0]
+
+
+def test_speed_response_cuts_the_lag_behind_a_fast_performer(monkeypatch) -> None:
+    fixed = _replace_lag(monkeypatch, 0.0, 0.05)  # 3 m/s
+    adaptive = _replace_lag(monkeypatch, 3.0, 0.05)
+    assert adaptive < fixed * 0.5
+
+
+def test_speed_response_leaves_a_still_performer_as_smoothed(monkeypatch) -> None:
+    jitter = [0.0, 0.02, -0.02, 0.01, -0.01, 0.0]
+    positions: dict[float, list[float]] = {}
+    for beta in (0.0, 3.0):
+        app = _make_app(detection_cfg=_replace_cfg(smoothing=0.15, speed_response=beta))
+        detector = _StubDetector(_StubDetection(0.4, 0.4, 0.6, 0.6))
+        marker = app._server.get_marker(0)
+        xs = iter([np.array([[x, 0.0, 0.0]]) for x in jitter])
+
+        import openfollow.runtime.services_detection_pin as module
+
+        monkeypatch.setattr(module, "unproject_to_plane", lambda *_a, **_k: next(xs))  # noqa: B023
+        positions[beta] = []
+        for _ in jitter:
+            _run(app, detector)
+            positions[beta].append(marker.pos[0])
+    # Centimetre jitter barely opens the filter: the output stays within a few
+    # millimetres of the fixed filter's.
+    assert positions[3.0] == pytest.approx(positions[0.0], abs=0.003)
+
+
+def test_speed_response_speeds_up_the_assist_glide(monkeypatch) -> None:
+    lags: dict[float, float] = {}
+    for beta in (0.0, 3.0):
+        app = _assist_app(_assist_cfg(assist_radius_m=50.0, smoothing=0.15, speed_response=beta))
+        out = app._server.get_marker(_PID)
+        anchor = get_or_create_manual_marker(app, _PID)
+        detector = _AssistDetector([])
+        for i in range(60):
+            x_frac = 0.1 + i * 0.005  # 0.05 m per frame = 3 m/s in world x
+            detector.detections = [_det(x_frac, 1)]
+            anchor.set_pos(x_frac * 10.0, 0.5, 0.0)  # operator keeps the anchor on them
+            _run_assist(app, detector, monkeypatch)
+        lags[beta] = (0.1 + 59 * 0.005) * 10.0 - out.pos[0]
+    assert lags[3.0] < lags[0.0] * 0.7
+
+
+# ---------------------------------------------------------------------------
+# swap_performers
+# ---------------------------------------------------------------------------
+
+
+def test_swap_moves_each_person_onto_the_other_marker(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    by_track = {_track(app, mid): mid for mid in (1, 2)}
+
+    assert swap_performers(app, 1, 2) is True
+    assert _track(app, by_track[10]) == 20
+    assert _track(app, by_track[20]) == 10
+    # Overlay ownership follows the swap at once, before the next frame.
+    assert app._detection_pin_states[1].attached_marker_id == 1
+    assert app._detection_pin_states[2].attached_marker_id == 2
+
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    assert _x(app, by_track[10]) == pytest.approx(7.0)
+    assert _x(app, by_track[20]) == pytest.approx(2.0)
+
+
+def test_swap_with_an_empty_marker_moves_the_person(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.4, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+    assert swap_performers(app, 3, 1) is True
+    _run_multi(app, [_det(0.4, 10)], monkeypatch)
+    assert _track(app, 1) is None
+    assert _track(app, 3) == 10
+    assert _x(app, 3) == pytest.approx(4.0)
+    assert app._server.get_marker(1).status == 0.0
+
+
+def test_swap_keeps_the_spotlight_on_its_marker(monkeypatch) -> None:
+    app = _multi_app(spotlight_marker_id=3, followed_marker_id=1)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    assert _track(app, 1) == 10
+
+    swap_performers(app, 1, 2)
+    for _ in range(80):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    # Marker 1 now holds person 20, so the spotlight settles on them.
+    assert _x(app, 1) == pytest.approx(7.0)
+    assert _x(app, 3) == pytest.approx(7.0)
+
+
+@pytest.mark.parametrize(("first", "second"), [(1, 1), (1, 9), (9, 1), (3, 1)])
+def test_swap_refuses_anything_but_two_performers(monkeypatch, first: int, second: int) -> None:
+    app = _multi_app(spotlight_marker_id=3)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    before = {mid: _track(app, mid) for mid in (1, 2)}
+
+    assert swap_performers(app, first, second) is False
+    assert {mid: _track(app, mid) for mid in (1, 2)} == before
+
+
+@pytest.mark.parametrize("cfg", [{"pin_mode": "assist"}, {"enabled": False}])
+def test_swap_needs_all_performers_running(cfg: dict) -> None:
+    app = _multi_app(**cfg)
+    assert swap_performers(app, 1, 2) is False
+    assert app._detection_pin_states == {}
+
+
+# ---------------------------------------------------------------------------
+# Entry zones (All Performers)
+# ---------------------------------------------------------------------------
+
+# Feet of ``_det(x, ...)`` with the default y1=0 sit at world y = 1.0.
+_WINGS = {
+    "left": [[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 2.0]],
+    "right": [[7.0, 0.0], [10.0, 0.0], [10.0, 2.0], [7.0, 2.0]],
+}
+
+
+def _entry_zone(side: str, marker_id: int, **kw) -> TriggerZoneConfig:  # noqa: ANN003
+    return TriggerZoneConfig(vertices=_WINGS[side], performer_marker_id=marker_id, **kw)
+
+
+def test_a_newcomer_in_an_entry_zone_takes_its_marker(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [_entry_zone("right", 3), _entry_zone("left", 2)]
+    _run_multi(app, [_det(0.85, 10), _det(0.5, 20, y1=0.4)], monkeypatch)
+
+    assert _track(app, 3) == 10
+    # Outside every entry zone: the lowest free marker, as before.
+    assert _track(app, 1) == 20
+    assert _track(app, 2) is None
+
+
+def test_an_entry_zone_whose_marker_is_taken_falls_back_to_the_lowest_free(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [_entry_zone("right", 1)]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    _run_multi(app, [_det(0.85, 10), _det(0.9, 20)], monkeypatch)
+
+    assert _track(app, 1) == 10
+    assert _track(app, 2) == 20
+
+
+def test_an_entry_zone_outranks_reacquire(monkeypatch) -> None:
+    app = _multi_app(reacquire_radius_m=5.0)
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+    _run_multi(app, [_det(0.75, 10, y1=0.4)], monkeypatch)
+    assert _track(app, 1) == 10
+    _run_multi(app, [], monkeypatch)  # marker 1 lost near x=7.5
+    _run_multi(app, [_det(0.85, 11)], monkeypatch)
+
+    assert _track(app, 3) == 11
+    assert _track(app, 1) is None
+
+
+@pytest.mark.parametrize(
+    "zone",
+    [
+        _entry_zone("right", 3, enabled=False),
+        _entry_zone("right", 9),
+        _entry_zone("right", -1),
+        TriggerZoneConfig(vertices=[[7.0, 0.0], [10.0, 0.0]], performer_marker_id=3),
+    ],
+)
+def test_zones_that_cannot_assign_are_ignored(monkeypatch, zone: TriggerZoneConfig) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [zone]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+
+def test_an_entry_zone_on_the_spotlight_marker_is_ignored(monkeypatch) -> None:
+    app = _multi_app(spotlight_marker_id=3)
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+
+def test_feet_off_the_floor_plane_skip_the_entry_zones(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.grid.z_offset = 0.5
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+
+    def _unproject(params, screen_pt, w, h, plane_z):  # noqa: ANN001, ANN202
+        if plane_z == 0.5:
+            return np.full((1, 3), np.nan)
+        return _linear_unproject(params, screen_pt, w, h, plane_z)
+
+    _run(app, _MultiDetector([_det(0.85, 10)]), monkeypatch, unproject=_unproject)
+    assert _track(app, 1) == 10
+
+
+# ---------------------------------------------------------------------------
+# Spots 2 and 3 – each its own marker following its own performer.
+# ---------------------------------------------------------------------------
+
+
+def _three_spot_app(**cfg) -> SimpleNamespace:  # noqa: ANN003
+    base = {"spot": 4, "spotlight2_marker_id": 5, "spotlight3_marker_id": 6}
+    base.update(cfg)
+    return _spot_app(ids=(1, 2, 3, 4, 5, 6), **base)
+
+
+def test_every_spotlight_is_left_out_of_the_performer_pool() -> None:
+    app = _three_spot_app()
+    assert performer_marker_ids(app) == [1, 2, 3]
+    assert [(s.number, s.marker_id) for s in spotlights(app)] == [(1, 4), (2, 5), (3, 6)]
+
+
+def test_each_spotlight_follows_its_own_performer(monkeypatch) -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=2, followed3_marker_id=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    by_track = {_track(app, mid): mid for mid in (1, 2, 3)}
+    assert _x(app, 4) == _x(app, 1)
+    assert _x(app, 5) == _x(app, 2)
+    # Two spots may follow the same performer.
+    assert _x(app, 6) == _x(app, 1)
+    assert {by_track[10], by_track[20]} == {1, 2}
+
+
+def test_a_spot_following_nobody_holds_invalid_while_the_others_track(monkeypatch) -> None:
+    app = _three_spot_app(followed=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert app._server.get_marker(4).status > 0.0
+    assert app._server.get_marker(5).status == 0.0
+    assert app._server.get_marker(6).status == 0.0
+
+
+def test_spotlights_still_drive_when_nobody_can_be_tracked(monkeypatch) -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=2)
+    _run(app, None, monkeypatch, unproject=_linear_unproject)
+    assert [app._server.get_marker(mid).status for mid in (4, 5)] == [0.0, 0.0]
+
+
+def test_a_marker_named_for_two_spots_is_used_by_the_lower_number() -> None:
+    app = _three_spot_app(spotlight3_marker_id=4)
+    assert [(s.number, s.marker_id) for s in spotlights(app)] == [(1, 4), (2, 5)]
+    assert performer_marker_ids(app) == [1, 2, 3, 6]
+
+
+def test_spot_two_works_without_spot_one(monkeypatch) -> None:
+    app = _three_spot_app(spot=-1, spotlight3_marker_id=-1, followed2_marker_id=1)
+    for _ in range(40):
+        _run_multi(app, [_det(0.2, 10)], monkeypatch)
+    assert _x(app, 5) == _x(app, 1)
+    # The next / previous keys move spot 1 only, so with no spot 1 they select markers.
+    assert not cycle_followed_performer(app, +1)
+
+
+def test_spotlights_need_all_performers_and_a_controlled_marker() -> None:
+    assert spotlights(_three_spot_app(pin_mode="assist")) == []
+    assert spotlights(_three_spot_app(enabled=False)) == []
+    app = _three_spot_app(spotlight2_marker_id=9)
+    assert [s.number for s in spotlights(app)] == [1, 3]
+
+
+def test_performer_snapshot_lists_every_spotlight() -> None:
+    app = _three_spot_app(followed=1, followed2_marker_id=1, followed3_marker_id=-1)
+    snap = performer_snapshot(app)
+    assert snap["spotlight_marker_id"] == 4
+    assert snap["followed_marker_id"] == 1
+    assert snap["spotlights"] == [
+        {"number": 1, "marker_id": 4, "followed_marker_id": 1},
+        {"number": 2, "marker_id": 5, "followed_marker_id": 1},
+        {"number": 3, "marker_id": 6, "followed_marker_id": None},
+    ]
+    assert [p["followed_by"] for p in snap["performers"]] == [[1, 2], [], []]

@@ -55,19 +55,26 @@ from openfollow.configuration import (
     MARKER_TOKEN_ALL,
     MOUSE3D_AXES,
     MOUSE3D_BUTTON_FIELDS,
+    SPOTLIGHT_COUNT,
     VALID_BUTTON_NAMES,
     AppConfig,
     DetectionMaskConfig,
+    DmxOutputConfig,
+    MovingLightConfig,
     OscDestinationConfig,
     OscTransmitterConfig,
     TriggerZoneConfig,
     _coerce_marker_tokens,
+    _filter_known,
     apply_renamed_marker_keys,
     config_write_lock,
+    followed_field,
     load_config,
     save_config,
+    spotlight_field,
     viewed_with_controlled,
 )
+from openfollow.dmx.server import fixture_pose, fixture_travel
 from openfollow.input.mouse3d_status import status_key
 
 # Module-level so handler closures resolve ``save_catalog`` from this
@@ -93,6 +100,7 @@ from openfollow.network.validate import (
 from openfollow.palette import AUTO_PICK_ORDER
 from openfollow.privilege.camera_config import AUTOMATIC
 from openfollow.runtime.diagnostics_export import WEB, ExportStatus, status_lines
+from openfollow.scene.pan_tilt import MIN_MARKS, CalibrationMark, solve_pose
 from openfollow.station_fqdn import canonical_host, fqdn_problem
 from openfollow.templates import (
     TEMPLATE_FILE_SUFFIX,
@@ -116,7 +124,7 @@ from openfollow.templates.writer import (
     delete_user_template,
     write_user_template,
 )
-from openfollow.units import UnitSystem, parse_length, parse_speed
+from openfollow.units import UnitSystem, format_small_length, parse_length, parse_speed
 from openfollow.web import diagnostics, peer_auth
 from openfollow.web._md import render_help_markdown
 from openfollow.web.bindings import check_binding, osc_row_overlap, osc_trigger_overlap
@@ -1813,6 +1821,14 @@ _SECTION_LENGTH_FIELDS: dict[str, frozenset[str]] = {
             "z_offset",
             "origin_length",
             "max_height",
+            "projection_tl_x",
+            "projection_tl_y",
+            "projection_tr_x",
+            "projection_tr_y",
+            "projection_br_x",
+            "projection_br_y",
+            "projection_bl_x",
+            "projection_bl_y",
         }
     ),
     "marker": frozenset(
@@ -2083,6 +2099,15 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "origin_visible": _as_bool,
         "origin_length": _as_float,
         "origin_thickness": _as_int,
+        "projection_use_grid": _as_bool,
+        "projection_tl_x": _as_float,
+        "projection_tl_y": _as_float,
+        "projection_tr_x": _as_float,
+        "projection_tr_y": _as_float,
+        "projection_br_x": _as_float,
+        "projection_br_y": _as_float,
+        "projection_bl_x": _as_float,
+        "projection_bl_y": _as_float,
     },
     "movement": {
         "min_speed": _as_float,
@@ -2142,6 +2167,7 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "btn_menu_confirm": _as_str,
         "btn_menu_cancel": _as_str,
         "btn_clear_messages": _as_str,
+        "btn_freeze": _as_str,
         "move_xy_stick": _as_str,
         "marker_fader_stick": _as_str,
         "marker_fader_max_speed_s": _as_float,
@@ -2169,6 +2195,7 @@ _SECTION_FIELD_PARSERS: dict[str, dict[str, _FieldParser]] = {
         "key_prev_marker": _as_str,
         "key_settings": _as_str,
         "key_clear_messages": _as_str,
+        "key_freeze": _as_str,
     },
     "osc": {
         "enabled": _as_bool,
@@ -2242,6 +2269,7 @@ _ZONE_FIELD_PARSERS: dict[str, _FieldParser] = {
     "osc_address_final_exit": _as_str,
     "destination_id": _as_str,
     "enabled": _as_bool,
+    "performer_marker_id": _as_int,
 }
 
 
@@ -2543,6 +2571,46 @@ def _controller_slots_view(server: ConfigWebServer) -> dict[str, Any]:
         items.append(item)
     controllers["items"] = items
     return controllers
+
+
+def _performers_view(server: ConfigWebServer, cfg: AppConfig) -> dict[str, Any]:
+    """The All Performers panel: each performer marker, named and coloured as its HUD card is.
+
+    Who is tracked comes from the main loop's stats; who is followed from
+    ``cfg``, so a switch shows at once rather than after the next reload.
+    """
+    block = (server.get_runtime_stats().get("tracking") or {}).get("all_performers") or {}
+    catalog = server.get_marker_catalog()
+    det = cfg.detection
+    spots: list[dict[str, Any]] = []
+    for number in range(1, SPOTLIGHT_COUNT + 1):
+        mid = int(getattr(det, spotlight_field(number)))
+        if mid in cfg.controlled_marker_ids and all(s["marker_id"] != mid for s in spots):
+            spots.append({"number": number, "marker_id": mid, "followed": int(getattr(det, followed_field(number)))})
+
+    def _entry(mid: int) -> dict[str, Any]:
+        entry = catalog.get(mid) if catalog is not None else None
+        return {
+            "marker_id": mid,
+            "label": _catalog_marker_label(mid, catalog),
+            "color": entry.color if entry is not None else AUTO_PICK_ORDER[mid % len(AUTO_PICK_ORDER)].lower(),
+        }
+
+    tracking = {int(p["marker_id"]): bool(p.get("tracking")) for p in block.get("performers") or []}
+    spot_ids = {s["marker_id"] for s in spots}
+    performers = []
+    for mid in sorted(m for m in cfg.controlled_marker_ids if m not in spot_ids):
+        row = _entry(mid)
+        row["tracking"] = tracking.get(mid, False)
+        row["followed_by"] = [s["number"] for s in spots if s["followed"] == mid]
+        row["followed"] = bool(row["followed_by"])
+        performers.append(row)
+    spotlights = [{**_entry(s["marker_id"]), "number": s["number"]} for s in spots]
+    return {
+        "spotlight": spotlights[0] if spotlights else None,
+        "spotlights": spotlights,
+        "performers": performers,
+    }
 
 
 def _osc_binding_marker_entry(
@@ -2931,6 +2999,22 @@ def _apply_osc_binding_fields(
             row.enabled = False
 
 
+def _moving_light_marks(cfg: AppConfig) -> list[dict[str, Any]]:
+    """The grid's four corners and centre, as floor marks a light can be aimed at."""
+    grid = cfg.grid
+    hw, hd = grid.width / 2.0, grid.depth / 2.0
+    ox, oy, oz = grid.x_offset, grid.y_offset, grid.z_offset
+    # PSN +X is stage left, so the stage-left corners sit at +hw.
+    points = [
+        ("Downstage left", ox + hw, oy - hd),
+        ("Downstage right", ox - hw, oy - hd),
+        ("Upstage right", ox - hw, oy + hd),
+        ("Upstage left", ox + hw, oy + hd),
+        ("Centre", ox, oy),
+    ]
+    return [{"label": label, "x": round(x, 3), "y": round(y, 3), "z": round(oz, 3)} for label, x, y in points]
+
+
 def _apply_osc_destination_fields(
     dest: OscDestinationConfig,
     data: Mapping[str, Any],
@@ -2942,6 +3026,41 @@ def _apply_osc_destination_fields(
             current = getattr(dest, field_name)
             setattr(dest, field_name, parser(data[field_name], current))
     dest.__post_init__()
+
+
+_DMX_OUTPUT_FIELD_PARSERS: dict[str, _FieldParser] = {
+    "enabled": _as_bool,
+    "protocol": _as_str,
+    "host": _as_str,
+    "fps": _as_int,
+    "priority": _as_int,
+    "ma2_port": _as_int,
+    "ma2_user": _as_str,
+    "ma2_password": _as_str,
+}
+
+_MOVING_LIGHT_FIELD_PARSERS: dict[str, _FieldParser] = {
+    "name": _as_str,
+    "enabled": _as_bool,
+    "marker_id": _as_int,
+    "universe": _as_int,
+    "address": _as_int,
+    "pan_channel": _as_int,
+    "tilt_channel": _as_int,
+    "fine": _as_bool,
+    "pan_range": _as_float,
+    "tilt_range": _as_float,
+    "invert_pan": _as_bool,
+    "invert_tilt": _as_bool,
+    "mounting": _as_str,
+    "pos_x": _as_float,
+    "pos_y": _as_float,
+    "pos_z": _as_float,
+    "heading": _as_float,
+    "base_pitch": _as_float,
+    "base_roll": _as_float,
+    "ma2_fixture": _as_int,
+}
 
 
 _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
@@ -2957,12 +3076,20 @@ _DETECTION_FIELD_PARSERS: dict[str, _FieldParser] = {
     "max_persons": _as_int,
     "pin_marker_id": _as_int,
     "smoothing": _as_float,
+    "speed_response": _as_float,
     "prediction": _as_float,
     "grace_period_ms": _as_int,
     "pin_mode": _as_str,
     "assist_radius_m": _as_float,
     "assist_strength": _as_float,
     "reacquire_radius_m": _as_float,
+    "spotlight_marker_id": _as_int,
+    "followed_marker_id": _as_int,
+    "spotlight2_marker_id": _as_int,
+    "followed2_marker_id": _as_int,
+    "spotlight3_marker_id": _as_int,
+    "followed3_marker_id": _as_int,
+    "rehearsal_performers": _as_int,
 }
 
 
@@ -3063,7 +3190,8 @@ def _config_dict_redacted(cfg: AppConfig) -> dict[str, Any]:
 _BROADCAST_EXCLUDED_SECTIONS = frozenset(
     # ``interface_assignment`` names NICs on this box; copying it to a peer
     # would repin that peer's PSN and OTP to an interface it may not have.
-    {"osc_destinations", "osc_transmitters", "trigger_zones", "interface_assignment"},
+    # ``dmx_output`` drives lights: two stations sending one universe would fight over it.
+    {"osc_destinations", "osc_transmitters", "trigger_zones", "interface_assignment", "dmx_output"},
 )
 
 
@@ -3216,6 +3344,9 @@ def _apply_import_data(
             for dest in cfg.osc_destinations.destinations:
                 dest.source_iface = pins.get(dest.id, "")
 
+    if "dmx_output" in data and isinstance(data["dmx_output"], dict):
+        cfg.dmx_output = DmxOutputConfig(**_filter_known(DmxOutputConfig, data["dmx_output"]))
+
     # Trigger zones: import global settings + zones list atomically
     if "trigger_zones" in data and isinstance(data["trigger_zones"], dict):
         tz_data = dict(data["trigger_zones"])
@@ -3303,6 +3434,11 @@ def _load_json_body() -> Any:
 # unproject / solve endpoints), so the corner-pinning overlay bows to match a
 # fisheye snapshot and the solve undistorts the pinned corners first.
 _WIZARD_CAMERA_FIELDS = ("pos_x", "pos_y", "pos_z", "pitch", "yaw", "roll", "fov")
+
+
+def _error_text(error_m: float | None, units: UnitSystem) -> str:
+    """A calibration-check distance, or why there is none."""
+    return "Off the stage plane" if error_m is None else format_small_length(error_m, units)
 
 
 def _wizard_lens_coeffs(cam: Any) -> tuple[float, float]:
@@ -5094,6 +5230,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             station_down=server.station_interface_down,
             stats=server.get_runtime_stats(),
             controller_slots=_controller_slots_view(server),
+            outputs_frozen=server.outputs_frozen(),
             local_ips=_get_local_ips(),
             update_status=server.get_update_status(),
             fqdn_problems=server.get_station_fqdn_problems(),
@@ -5142,6 +5279,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             on_device=_is_on_device_request(),
             cancel_button=_cancel_button_label(config),
             psn_source_advisory=server.get_psn_source_advisory(),
+            calibration_marks=_moving_light_marks(config),
             **_build_input_template_data(config, server.get_runtime_stats().get("video")),
         )
 
@@ -5181,6 +5319,55 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
     def get_controller_slots() -> Any:
         """The Controller Slots table, from the main loop's latest stats snapshot."""
         return template("partials/controller_slots_table", controllers=_controller_slots_view(server))
+
+    @app.get("/section/detection/performers")
+    def get_detection_performers() -> Any:
+        """The All Performers panel, from the main loop's latest stats snapshot."""
+        return template("partials/performers_table", view=_performers_view(server, _request_scoped_config()))
+
+    @app.post("/section/detection/follow/<target:re:none|[0-9]+>")
+    def follow_performer(target: str) -> Any:
+        """Point a spotlight (``?spot=N``, spot 1 by default) at one performer marker, or at nobody."""
+        try:
+            number = int(request.query.get("spot", "1"))
+        except ValueError:
+            number = 0
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            marker_id = -1 if target == "none" else int(target)
+            if 1 <= number <= SPOTLIGHT_COUNT and (marker_id < 0 or marker_id in cfg.controlled_marker_ids):
+                setattr(cfg.detection, followed_field(number), marker_id)
+                save_config(cfg, server.config_path)
+        return template("partials/performers_table", view=_performers_view(server, cfg))
+
+    @app.get("/section/output_freeze")
+    def get_output_freeze() -> Any:
+        """The freeze control, from the main loop's last poll."""
+        return template("partials/output_freeze", frozen=server.outputs_frozen())
+
+    @app.post("/section/output_freeze/<action:re:freeze|release>")
+    def output_freeze(action: str) -> Any:
+        """Freeze or release every output; the main loop applies it on its next poll."""
+        frozen = action == "freeze"
+        server.request_freeze(frozen)
+        return template("partials/output_freeze", frozen=frozen)
+
+    @app.post("/section/detection/swap/<first:int>")
+    def pick_performer_swap(first: int) -> Any:
+        """Mark one performer to swap; the panel then offers every other one."""
+        view = _performers_view(server, _request_scoped_config())
+        if any(p["marker_id"] == first for p in view["performers"]):
+            view["swap_from"] = first
+        return template("partials/performers_table", view=view)
+
+    @app.post("/section/detection/swap/<first:int>/<second:int>")
+    def swap_performers(first: int, second: int) -> Any:
+        """Have the main loop swap the people two performer markers follow."""
+        view = _performers_view(server, _request_scoped_config())
+        ids = {p["marker_id"] for p in view["performers"]}
+        if first != second and first in ids and second in ids:
+            server.request_performer_swap(first, second)
+        return template("partials/performers_table", view=view)
 
     @app.post("/section/controller_slots/<action:re:identify|forget>/<index:int>")
     def controller_slot_action(action: str, index: int) -> Any:
@@ -6350,7 +6537,7 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
     @app.post("/section/grid")
     def update_grid() -> Any:
         """Update grid settings."""
-        cfg = _save_section_from_form("grid", bool_fields=("visible", "origin_visible"))
+        cfg = _save_section_from_form("grid", bool_fields=("visible", "origin_visible", "projection_use_grid"))
         return template("partials/grid", config=cfg, saved=True)
 
     @app.post("/section/movement")
@@ -7531,6 +7718,131 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
             if moved:
                 save_config(cfg, server.config_path)
         return _render_osc_destinations_section(cfg, saved=moved, focus_id=dest_id)
+
+    # Moving lights: the output's own settings plus one row per fixture, each row
+    # with a Calibrate panel that aims the light by hand and fits its position.
+
+    def _render_dmx_output(cfg: AppConfig, *, saved: bool = False, focus_id: str = "") -> Any:
+        return template(
+            "partials/dmx_output",
+            config=cfg,
+            saved=saved,
+            focus_id=focus_id,
+            calibration_marks=_moving_light_marks(cfg),
+        )
+
+    @app.get("/section/dmx_output")
+    def get_dmx_output_section() -> Any:
+        return _render_dmx_output(_request_scoped_config())
+
+    @app.post("/section/dmx_output")
+    def save_dmx_output() -> Any:
+        form_data: dict[str, Any] = dict(request.forms)
+        form_data["enabled"] = "enabled" in request.forms
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            _apply_parsed_updates(cfg.dmx_output, form_data, _DMX_OUTPUT_FIELD_PARSERS)
+            cfg.dmx_output.__post_init__()
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True)
+
+    @app.post("/section/moving_lights/add")
+    def add_moving_light() -> Any:
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            number = len(cfg.dmx_output.fixtures) + 1
+            fixture = MovingLightConfig(
+                name=f"Light {number}",
+                marker_id=cfg.controlled_marker_ids[0] if cfg.controlled_marker_ids else 0,
+            )
+            cfg.dmx_output.fixtures.append(fixture)
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True, focus_id=fixture.id)
+
+    @app.post("/section/moving_light/<fixture_id>")
+    def save_moving_light(fixture_id: str) -> Any:
+        form_data: dict[str, Any] = dict(request.forms)
+        for name in ("enabled", "fine", "invert_pan", "invert_tilt"):
+            form_data[name] = name in request.forms
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            fixture = cfg.dmx_output.fixture(fixture_id)
+            if fixture is None:
+                abort(404, "Unknown moving light")
+                return ""  # pragma: no cover – abort() raises first
+            _apply_parsed_updates(fixture, form_data, _MOVING_LIGHT_FIELD_PARSERS)
+            fixture.__post_init__()
+            save_config(cfg, server.config_path)
+        return _render_dmx_output(cfg, saved=True, focus_id=fixture_id)
+
+    @app.post("/section/moving_light/<fixture_id>/delete")
+    def delete_moving_light(fixture_id: str) -> Any:
+        with _config_write_lock:
+            cfg = load_config(server.config_path)
+            fixtures = cfg.dmx_output.fixtures
+            kept = [f for f in fixtures if f.id != fixture_id]
+            if len(kept) != len(fixtures):
+                cfg.dmx_output.fixtures = kept
+                save_config(cfg, server.config_path)
+        server.aim_moving_light(fixture_id, None)
+        return _render_dmx_output(cfg, saved=True)
+
+    @app.post("/api/moving_light/<fixture_id>/aim")
+    def aim_moving_light(fixture_id: str) -> Any:
+        """Point a light by hand while calibrating (``{"pan", "tilt"}`` 0..1), or ``{"release": true}``."""
+        data = _load_json_body()
+        if not isinstance(data, dict):
+            return _save_failed(400, "Send pan and tilt.")
+        if data.get("release"):
+            server.aim_moving_light(fixture_id, None)
+            return {"aimed": False}
+        try:
+            pan, tilt = float(data["pan"]), float(data["tilt"])
+        except (KeyError, TypeError, ValueError):
+            return _save_failed(400, "Pan and tilt must be numbers from 0 to 1.")
+        if not (0.0 <= pan <= 1.0 and 0.0 <= tilt <= 1.0):
+            return _save_failed(400, "Pan and tilt must be numbers from 0 to 1.")
+        if _request_scoped_config().dmx_output.fixture(fixture_id) is None:
+            return _save_failed(404, "This light is no longer set up. Reload the page.")
+        if not server.aim_moving_light(fixture_id, (pan, tilt)):
+            return _save_failed(409, "The moving lights output is off.", "Switch it on and save it first.")
+        return {"aimed": True}
+
+    @app.post("/api/moving_light/<fixture_id>/solve")
+    def solve_moving_light(fixture_id: str) -> Any:
+        """Fit a light's position and heading to the marks it was aimed at (no save)."""
+        data = _load_json_body()
+        fixture = _request_scoped_config().dmx_output.fixture(fixture_id)
+        if fixture is None:
+            return _save_failed(404, "This light is no longer set up. Reload the page.")
+        raw_marks = data.get("marks") if isinstance(data, dict) else None
+        if not isinstance(raw_marks, list):
+            return _save_failed(400, "Send the recorded marks.")
+        try:
+            marks = [
+                CalibrationMark(float(m["x"]), float(m["y"]), float(m["z"]), float(m["pan"]), float(m["tilt"]))
+                for m in raw_marks
+            ]
+        except (KeyError, TypeError, ValueError):
+            return _save_failed(400, "Every mark needs a position and a pan and tilt.")
+        if len(marks) < MIN_MARKS:
+            return _save_failed(400, f"Record at least {MIN_MARKS} marks, spread across the stage.")
+        if not all(math.isfinite(v) for m in marks for v in (m.x, m.y, m.z, m.pan, m.tilt)):
+            return _save_failed(400, "Every mark needs a position and a pan and tilt.")
+        result = solve_pose(marks, fixture_travel(fixture), fixture_pose(fixture))
+        if result is None:
+            return _save_failed(422, "The marks do not fit one position. Check each was aimed at the right mark.")
+        pose = result.pose
+        return {
+            "pos_x": round(pose.x, 3),
+            "pos_y": round(pose.y, 3),
+            "pos_z": round(pose.z, 3),
+            "heading": round(pose.heading, 2),
+            "base_pitch": round(pose.pitch, 2),
+            "base_roll": round(pose.roll, 2),
+            "errors_deg": [round(e, 2) for e in result.errors_deg],
+            "worst_deg": round(result.worst_deg, 2),
+        }
 
     @app.post("/section/osc_destinations/reorder")
     def reorder_osc_destinations() -> Any:
@@ -8993,6 +9305,18 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
 
     # -- Trigger zone CRUD API ----------------------------------------
 
+    @app.get("/api/zones/preset/magicq")
+    def api_zone_preset_magicq() -> Any:
+        """Zone addresses that go a MagicQ playback on first entry and release it on final exit."""
+        from openfollow.osc.desk_presets import PresetError, magicq_zone_cues
+
+        response.content_type = "application/json"
+        try:
+            return json.dumps(magicq_zone_cues(request.query.get("playback", ""), request.query.get("cue", "")))
+        except PresetError as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+
     @app.get("/api/zones")
     def api_list_zones() -> Any:
         """Return zones + live occupancy + marker positions for the editor."""
@@ -9284,6 +9608,86 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
         # while the operator is still in the Setup Wizard.
         return template(
             "wizard", config=config, **input_data, **_page_update_context(server), **_page_host_context(config)
+        )
+
+    @app.get("/calibration-check")
+    def calibration_check_page() -> Any:
+        """Check the saved calibration against the stage's floor marks."""
+        config = _request_scoped_config()
+        return template(
+            "calibration_check", config=config, **_page_update_context(server), **_page_host_context(config)
+        )
+
+    @app.get("/api/calibration/marks")
+    def api_calibration_marks() -> Any:
+        """Where the saved calibration draws each floor mark on the snapshot."""
+        from openfollow.scene.calibration_check import project_marks
+
+        response.content_type = "application/json"
+        try:
+            img_w = float(request.query.get("image_width", ""))
+            img_h = float(request.query.get("image_height", ""))
+            _require_wizard_canvas(img_w, img_h)
+        except ValueError as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+        config = _request_scoped_config()
+        marks = project_marks(config.camera, config.grid, img_w, img_h)
+        return json.dumps({"marks": {name: (list(pt) if pt else None) for name, pt in marks.items()}})
+
+    @app.post("/api/calibration/check")
+    def api_calibration_check() -> Any:
+        """Error of each placed floor mark against the saved calibration."""
+        from openfollow.scene.calibration_check import MARK_NAMES, error_level, measure_marks
+
+        response.content_type = "application/json"
+        data = _load_json_body()
+        if data is None:
+            return json.dumps({"error": "Invalid JSON"})
+        try:
+            if not isinstance(data, dict):
+                raise TypeError("Expected a JSON object")
+            img_w = float(data["image_width"])
+            img_h = float(data["image_height"])
+            _require_wizard_canvas(img_w, img_h)
+            raw = data["marks"]
+            if not isinstance(raw, dict):
+                raise TypeError("marks must be an object")
+            placed: dict[str, tuple[float, float]] = {}
+            for name, pt in raw.items():
+                if name not in MARK_NAMES:
+                    raise ValueError(f"unknown mark {name!r}")
+                if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                    raise ValueError("each mark must be [x, y]")
+                x, y = float(pt[0]), float(pt[1])
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    raise ValueError("mark coords must be finite numbers")
+                placed[name] = (x, y)
+        except (KeyError, TypeError, ValueError) as exc:
+            response.status = 400
+            return json.dumps({"error": str(exc)})
+
+        config = _request_scoped_config()
+        units = UnitSystem(config.ui.unit_system)
+        results = measure_marks(config.camera, config.grid, placed, img_w, img_h)
+        # The worst mark sets the verdict; one that misses the stage plane is worst of all.
+        measured = [r.error_m for r in results if r.error_m is not None]
+        worst = max(measured) if measured and len(measured) == len(results) else None
+        return json.dumps(
+            {
+                "marks": [
+                    {
+                        "name": r.name,
+                        "error_m": r.error_m,
+                        "error_text": _error_text(r.error_m, units),
+                        "level": r.level,
+                    }
+                    for r in results
+                ],
+                "worst_m": worst,
+                "worst_text": _error_text(worst, units) if results else "",
+                "level": error_level(worst) if results else "ok",
+            }
         )
 
     @app.get("/api/video/snapshot/full")

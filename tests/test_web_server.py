@@ -5623,6 +5623,241 @@ def test_update_detection_tracking_saves_reacquire_radius(live_server) -> None:
     assert load_config(server.config_path).detection.reacquire_radius_m == pytest.approx(2.5)
 
 
+def test_update_detection_tracking_saves_speed_response(live_server) -> None:
+    server, base = live_server
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "assist", "speed_response": "2.5"}
+    )
+    assert status == 200
+    assert 'name="speed_response" value="2.5"' in body
+    assert load_config(server.config_path).detection.speed_response == pytest.approx(2.5)
+
+
+@pytest.mark.parametrize(
+    "raw,message",
+    [
+        ("-1", "Speed response must be between 0 and 10."),
+        ("11", "Speed response must be between 0 and 10."),
+        ("fast", "Must be a number."),
+    ],
+)
+def test_validate_endpoint_rejects_bad_speed_response(live_server, raw: str, message: str) -> None:
+    _, base = live_server
+    status, body = _get(base, "/api/validate/detection/speed_response?speed_response=" + raw)
+    assert status == 200
+    assert message in body
+    assert "field-error-msg" in body
+
+
+def _spotlight_server(server: ConfigWebServer, *, followed: int = -1, tracking: tuple[int, ...] = ()) -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2, 3]
+    cfg.viewer_marker_ids = [1, 2, 3]
+    cfg.detection.enabled = True
+    cfg.detection.pin_mode = "multi"
+    cfg.detection.spotlight_marker_id = 3
+    cfg.detection.followed_marker_id = followed
+    save_config(cfg, server.config_path)
+    performers = [{"marker_id": mid, "tracking": mid in tracking} for mid in (1, 2)]
+    server._runtime_stats_provider = lambda: {"tracking": {"all_performers": {"performers": performers}}}
+
+
+def test_update_detection_tracking_saves_rehearsal_performers(live_server) -> None:
+    server, base = live_server
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "multi", "rehearsal_performers": "3"}
+    )
+    assert status == 200
+    assert load_config(server.config_path).detection.rehearsal_performers == 3
+    assert "Rehearsal is on" in body
+
+    status, body = _post_form(
+        base, "/section/detection/tracking", {"tracking_state": "off", "rehearsal_performers": "3"}
+    )
+    assert status == 200
+    assert "Rehearsal is on" not in body
+
+
+def test_update_detection_tracking_saves_the_spotlight_marker(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(base, "/section/detection/tracking", {"tracking_state": "multi", "spotlight_marker_id": "2"})
+    assert status == 200
+    assert load_config(server.config_path).detection.spotlight_marker_id == 2
+
+
+def test_performers_panel_lists_each_performer_with_a_follow_button(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=2, tracking=(1,))
+    catalog = MarkerCatalog()
+    catalog.upsert(1, name="Lead", color="#0652dd")
+    server._marker_catalog_provider = lambda: catalog
+
+    status, body = _get(base, "/section/detection/performers")
+
+    assert status == 200
+    assert "Lead (1)" in body and "Marker 2" in body
+    # The spotlight marker is not a performer.
+    assert "Marker 3" not in body
+    assert "Tracking a person" in body and "No person - followed" in body
+    assert 'hx-post="/section/detection/follow/1?spot=1"' in body
+    assert 'hx-post="/section/detection/follow/none?spot=1"' in body
+    assert ">Follow<" in body and ">Stop following<" in body
+    assert "--marker-color: #0652dd" in body
+
+
+def test_performers_panel_without_a_spotlight_offers_no_follow_buttons(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    cfg = load_config(server.config_path)
+    cfg.detection.spotlight_marker_id = -1
+    save_config(cfg, server.config_path)
+
+    _, body = _get(base, "/section/detection/performers")
+
+    assert "Choose a spotlight marker" in body
+    assert "Marker 3" in body
+    assert "/section/detection/follow/" not in body
+
+
+def test_performers_panel_with_no_controlled_markers_says_so(live_server) -> None:
+    _, base = live_server
+    _, body = _get(base, "/section/detection/performers")
+    assert "No performer markers" in body
+
+
+@pytest.mark.parametrize(("target", "expected"), [("2", 2), ("none", -1), ("9", 1)])
+def test_follow_points_the_spotlight_at_a_controlled_performer_only(live_server, target: str, expected: int) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=1)
+
+    status, body = _post_form(base, f"/section/detection/follow/{target}", {})
+
+    assert status == 200
+    assert load_config(server.config_path).detection.followed_marker_id == expected
+    if expected == 2:
+        assert 'hx-post="/section/detection/follow/1?spot=1"' in body
+
+
+def _three_spot_server(server: ConfigWebServer) -> None:
+    cfg = AppConfig()
+    cfg.controlled_marker_ids = [1, 2, 3, 4, 5]
+    cfg.viewer_marker_ids = [1, 2, 3, 4, 5]
+    cfg.detection.enabled = True
+    cfg.detection.pin_mode = "multi"
+    cfg.detection.spotlight_marker_id = 4
+    cfg.detection.followed_marker_id = 1
+    cfg.detection.spotlight2_marker_id = 5
+    cfg.detection.followed2_marker_id = 1
+    save_config(cfg, server.config_path)
+    server._runtime_stats_provider = lambda: {"tracking": {"all_performers": {"performers": []}}}
+
+
+def test_performers_panel_with_two_spotlights_names_each_spot(live_server) -> None:
+    server, base = live_server
+    _three_spot_server(server)
+
+    _, body = _get(base, "/section/detection/performers")
+
+    assert "Marker 4" not in body and "Marker 5" not in body
+    assert "followed by Spot 1 and Spot 2" in body
+    assert 'hx-post="/section/detection/follow/none?spot=2"' in body and ">Stop Spot 2<" in body
+    assert 'hx-post="/section/detection/follow/2?spot=2"' in body and ">Spot 2<" in body
+
+
+@pytest.mark.parametrize(
+    ("spot", "field", "changed"),
+    [
+        ("2", "followed2_marker_id", True),
+        ("3", "followed3_marker_id", True),
+        ("4", "followed_marker_id", False),
+        ("x", "followed_marker_id", False),
+    ],
+)
+def test_follow_with_a_spot_number_points_that_spot_only(live_server, spot: str, field: str, changed: bool) -> None:
+    server, base = live_server
+    _three_spot_server(server)
+
+    status, _ = _post_form(base, f"/section/detection/follow/3?spot={spot}", {})
+
+    assert status == 200
+    det = load_config(server.config_path).detection
+    assert (getattr(det, field) == 3) is changed
+    if changed:
+        assert det.followed_marker_id == 1
+
+
+def test_update_detection_tracking_saves_spots_two_and_three(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(
+        base,
+        "/section/detection/tracking",
+        {"tracking_state": "multi", "spotlight2_marker_id": "4", "spotlight3_marker_id": "5"},
+    )
+    assert status == 200
+    det = load_config(server.config_path).detection
+    assert (det.spotlight2_marker_id, det.spotlight3_marker_id) == (4, 5)
+
+
+def test_performers_panel_offers_a_swap_on_every_performer(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, tracking=(1, 2))
+    _, body = _get(base, "/section/detection/performers")
+    assert 'hx-post="/section/detection/swap/1"' in body
+    assert 'hx-post="/section/detection/swap/2"' in body
+    assert "data-swap-from" not in body
+
+
+def test_performers_panel_with_one_performer_offers_no_swap(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    cfg = load_config(server.config_path)
+    cfg.controlled_marker_ids = [1, 3]
+    save_config(cfg, server.config_path)
+    _, body = _get(base, "/section/detection/performers")
+    assert "/section/detection/swap/" not in body
+
+
+def test_picking_a_performer_to_swap_offers_the_others(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=1)
+
+    status, body = _post_form(base, "/section/detection/swap/1", {})
+
+    assert status == 200
+    assert 'data-swap-from="1"' in body
+    assert 'hx-post="/section/detection/swap/1/2"' in body
+    assert 'hx-get="/section/detection/performers"' in body  # Cancel on the picked row
+    # Follow buttons step aside while a swap is being picked.
+    assert "/section/detection/follow/" not in body
+
+
+@pytest.mark.parametrize("first", ["3", "9"])
+def test_picking_a_non_performer_to_swap_changes_nothing(live_server, first: str) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    _, body = _post_form(base, f"/section/detection/swap/{first}", {})
+    assert "data-swap-from" not in body
+
+
+def test_swapping_two_performers_queues_it_for_the_main_loop(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+
+    status, body = _post_form(base, "/section/detection/swap/2/1", {})
+
+    assert status == 200
+    assert server._command_queue.consume_performer_swaps() == [(2, 1)]
+    assert "data-swap-from" not in body
+
+
+@pytest.mark.parametrize("path", ["1/1", "1/3", "9/1"])
+def test_a_swap_that_is_not_two_performers_is_not_queued(live_server, path: str) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    _post_form(base, f"/section/detection/swap/{path}", {})
+    assert server._command_queue.consume_performer_swaps() == []
+
+
 def test_update_detection_tracking_off_disables_and_keeps_last_mode(live_server) -> None:
     """``tracking_state=off`` disables detection but leaves ``pin_mode`` intact
     so re-enabling restores the operator's last mode."""
@@ -5715,6 +5950,29 @@ def test_api_update_zone_replaces_fields_for_existing_index(live_server) -> None
 
     saved = load_config(server.config_path)
     assert saved.trigger_zones.zones[idx].name == "Renamed"
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("3", 3), (2, 2), ("-1", -1), ("wing", 5), (-9, -1)])
+def test_api_update_zone_saves_the_entry_marker(live_server, raw: object, expected: int) -> None:
+    server, base = live_server
+    _, created = _post_json(base, "/api/zones", {"name": "Wing", "performer_marker_id": 5})
+    idx = created["index"]
+
+    status, _ = _put_json(base, f"/api/zones/{idx}", {"performer_marker_id": raw})
+
+    assert status == 200
+    assert load_config(server.config_path).trigger_zones.zones[idx].performer_marker_id == expected
+
+
+def test_zone_editor_offers_the_controlled_markers_as_entry_markers(live_server) -> None:
+    server, base = live_server
+    cfg = load_config(server.config_path)
+    cfg.controlled_marker_ids = [2, 4]
+    cfg.viewer_marker_ids = [2, 4]
+    save_config(cfg, server.config_path)
+    _, body = _get(base, "/")
+    assert "var PERFORMER_MARKERS = [2, 4];" in body
+    assert 'data-zone-field="performer_marker_id"' in body
 
 
 def test_api_update_zone_returns_404_for_out_of_range_index(live_server) -> None:
@@ -6400,6 +6658,34 @@ def test_update_grid_post_toggles_visible(live_server) -> None:
     status, _ = _post_form(base, "/section/grid", {"width": "25", "visible": "on"})
     assert status == 200
     assert load_config(server.config_path).grid.visible is True
+
+
+def test_update_grid_post_saves_the_projection_area(live_server) -> None:
+    """The Projection Area corners save from the grid form; unticking Use Grid keeps them."""
+    server, base = live_server
+    status, _ = _post_form(
+        base,
+        "/section/grid",
+        {"width": "10", "projection_tl_x": "-7", "projection_tl_y": "8.5", "projection_br_x": "3"},
+    )
+    assert status == 200
+    saved = load_config(server.config_path).grid
+    assert saved.projection_use_grid is False
+    assert (saved.projection_tl_x, saved.projection_tl_y, saved.projection_br_x) == (-7.0, 8.5, 3.0)
+
+    status, _ = _post_form(base, "/section/grid", {"width": "10", "projection_use_grid": "on"})
+    assert status == 200
+    assert load_config(server.config_path).grid.projection_use_grid is True
+
+
+def test_grid_section_renders_the_projection_area(live_server) -> None:
+    _, base = live_server
+    status, body = _get(base, "/section/grid")
+    assert status == 200
+    assert 'name="projection_use_grid"' in body
+    for corner in ("tl", "tr", "br", "bl"):
+        for axis in ("x", "y"):
+            assert f'name="projection_{corner}_{axis}"' in body
 
 
 def test_update_marker_post_persists_visual_booleans(live_server) -> None:
@@ -8009,3 +8295,44 @@ def test_vlan_subinterface_is_offered_as_a_plane_pin(live_server, monkeypatch) -
     assert status == 200
     assert 'value="eth0.10"' in body
     assert "eth0.10 – 10.20.0.5" in body
+
+
+# --------------------------------------------------------------------------- #
+# Freeze outputs
+# --------------------------------------------------------------------------- #
+
+
+def test_the_overview_page_offers_the_freeze_control(live_server) -> None:
+    _, base = live_server
+    status, body = _get(base, "/")
+    assert status == 200
+    assert 'id="output-freeze"' in body
+    assert 'hx-post="/section/output_freeze/freeze"' in body
+
+
+@pytest.mark.parametrize("frozen", [True, False])
+def test_the_freeze_control_shows_the_main_loops_state(live_server, frozen: bool) -> None:
+    server, base = live_server
+    server._command_queue.publish_outputs_frozen(frozen)
+    status, body = _get(base, "/section/output_freeze")
+    assert status == 200
+    assert ("Outputs frozen" in body) is frozen
+    assert ('hx-post="/section/output_freeze/release"' in body) is frozen
+    assert ('hx-post="/section/output_freeze/freeze"' in body) is not frozen
+    assert 'hx-trigger="every 1s"' in body
+
+
+@pytest.mark.parametrize(("action", "frozen"), [("freeze", True), ("release", False)])
+def test_freeze_and_release_are_queued_for_the_main_loop(live_server, action: str, frozen: bool) -> None:
+    server, base = live_server
+    status, body = _post_form(base, f"/section/output_freeze/{action}", {})
+    assert status == 200
+    assert ("Outputs frozen" in body) is frozen
+    assert server._command_queue.consume_freeze_requests() == [frozen]
+
+
+def test_anything_else_is_not_a_freeze_action(live_server) -> None:
+    server, base = live_server
+    status, _ = _post_form(base, "/section/output_freeze/toggle", {})
+    assert status == 404
+    assert server._command_queue.consume_freeze_requests() == []

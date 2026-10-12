@@ -88,14 +88,14 @@ GTK/GStreamer stack, and the detection + export toolchains, so it runs on a clea
 Mac). Requires the dev setup above plus `brew install librsvg create-dmg`:
 
 ```bash
-make dmg    # -> dist/OpenFollow-<version>-<arch>.dmg
+make dmg    # -> dist/AutoFollow-<version>-<arch>.dmg
 ```
 
 The output is single-arch and large (~2-2.5 GB, torch is bundled). The app is
 ad-hoc signed, not notarized, so clear Gatekeeper's quarantine flag on first run:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/OpenFollow.app"   # or right-click -> Open
+xattr -dr com.apple.quarantine "/Applications/AutoFollow.app"   # or right-click -> Open
 ```
 
 See [PACKAGING.md](PACKAGING.md#macos-dmg-developer-build) for details.

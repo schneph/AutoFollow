@@ -15,6 +15,7 @@
 %# Restart progress banner – global (any tab can trigger the restart
 %# from Diagnostics, so the notice has to live above the tabs).
 <div id="top-restart-notice" class="restart-notice" style="display:none;margin-bottom:1rem;">App is restarting&hellip; Please wait.</div>
+% include('partials/output_freeze.tpl', frozen=outputs_frozen)
 
 <div class="tab-bar">
     <button type="button" class="tab-btn" data-tab="overview">Overview</button>
@@ -61,6 +62,7 @@
 <div class="tab-content" id="tab-camera-grid">
     <div class="wizard-launch">
         <a href="/wizard" class="btn-link save-btn">Open Setup Wizard</a>
+        <a href="/calibration-check" class="btn-link btn-secondary">Check Calibration</a>
         <span class="section-note">Guided camera positioning and grid calibration</span>
     </div>
     % include('partials/video_source.tpl', config=config, saved=False, available_inputs=available_inputs, input_html_fragments=input_html_fragments, video_failure=video_failure, video_failure_text=video_failure_text, video_error_message=video_error_message, video_failure_action=video_failure_action)
@@ -101,6 +103,7 @@
     % include('partials/psn.tpl', config=config, saved=False, local_ips=local_ips, psn_source_advisory=psn_source_advisory)
     % include('partials/otp_output.tpl', config=config, saved=False)
     % include('partials/rttrpm_output.tpl', config=config, saved=False)
+    % include('partials/dmx_output.tpl', config=config, saved=False, focus_id='', calibration_marks=calibration_marks if defined('calibration_marks') else [])
     % from openfollow.configuration import (
     %     VALID_OSC_FRAMINGS,
     %     VALID_OSC_TRANSMITTER_PROTOCOLS,

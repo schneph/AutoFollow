@@ -328,6 +328,7 @@ def _dummy_app(cfg: AppConfig | None = None) -> SimpleNamespace:
         _server=None,
         _otp_server=None,
         _rttrpm_server=None,
+        _dmx_server=None,
         _psn_receiver=None,
         _web_server=None,
         _video_receiver=None,
@@ -1310,6 +1311,41 @@ class TestUpdateDelegators:
         assert kwargs["screen_point_buffer"] is services._screen_point_buffer
         assert kwargs["dt"] == 0.5
 
+    @pytest.mark.parametrize(("enabled", "count", "rehearsal"), [(True, 2, True), (True, 0, False), (False, 2, False)])
+    def test_rehearsal_performers_stand_in_for_the_detector_while_on(
+        self,
+        services: AppRuntimeServices,
+        monkeypatch: pytest.MonkeyPatch,
+        enabled: bool,
+        count: int,
+        rehearsal: bool,
+    ) -> None:
+        calls: list[dict[str, Any]] = []
+        updates: list[int] = []
+        monkeypatch.setattr(services_module, "apply_detection_pin_helper", lambda app, **kw: calls.append(kw))
+        monkeypatch.setattr(services._rehearsal, "update", lambda app, n: updates.append(n))
+        services._person_detector = object()  # type: ignore[assignment]
+        services._app._config.detection.enabled = enabled
+        services._app._config.detection.rehearsal_performers = count
+
+        services.apply_detection_pin()
+
+        expected = services._rehearsal if rehearsal else services._person_detector
+        assert calls[0]["person_detector"] is expected
+        assert services._tracking_source() is expected
+        assert updates == ([count] if rehearsal else [])
+        flag = services._status_flags["rehearsal"]
+        assert flag == (("caution", "Rehearsal: 2 simulated performers") if rehearsal else None)
+
+    def test_one_rehearsal_performer_is_named_in_the_singular(
+        self, services: AppRuntimeServices, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(services_module, "apply_detection_pin_helper", lambda app, **kw: None)
+        services._app._config.detection.enabled = True
+        services._app._config.detection.rehearsal_performers = 1
+        services.apply_detection_pin()
+        assert services._status_flags["rehearsal"] == ("caution", "Rehearsal: 1 simulated performer")
+
     # Note: ``update_controller_status`` and ``services_controller_status``
     # were removed when the binding moved to the marker cards.
 
@@ -1493,6 +1529,12 @@ class TestShutdown:
         assert app._psn_receiver.stopped is True
         assert transmitter.stopped is True
         assert services._osc_transmitter_manager is None
+
+    def test_stops_the_moving_lights_output(self, services: AppRuntimeServices) -> None:
+        stopped: list[bool] = []
+        services._app._dmx_server = SimpleNamespace(stop=lambda: stopped.append(True))
+        services.shutdown()
+        assert stopped == [True]
 
     def test_none_subsystems_are_skipped_cleanly(self, services: AppRuntimeServices) -> None:
         # All subsystems start as None – shutdown must not raise.
@@ -2573,6 +2615,33 @@ class TestInitOscTransmitters:
             grid=GridConfig(width=10.0, depth=6.0, z_offset=0.5, max_height=4.0),
         )
         assert services._grid_provider() == (10.0, 6.0, 4.0, 0.5)
+
+    def test_projection_provider_follows_the_grid(
+        self,
+        services: AppRuntimeServices,
+    ) -> None:
+        from openfollow.configuration import GridConfig
+
+        services._app._config = replace(services._app._config, grid=GridConfig(width=10.0, depth=6.0, y_offset=3.0))
+        uv = services._projection_provider()
+        assert uv is not None
+        assert uv(2.5, 4.5) == pytest.approx((0.75, 0.25))
+        # Unchanged corners reuse the mapping; a moved grid rebuilds it.
+        assert services._projection_provider() is uv
+        services._app._config = replace(services._app._config, grid=GridConfig(width=20.0, depth=6.0, y_offset=3.0))
+        rebuilt = services._projection_provider()
+        assert rebuilt is not uv and rebuilt is not None
+        assert rebuilt(5.0, 3.0) == pytest.approx((0.75, 0.5))
+
+    def test_projection_provider_is_none_for_an_unusable_area(
+        self,
+        services: AppRuntimeServices,
+    ) -> None:
+        from openfollow.configuration import GridConfig
+
+        bow_tie = GridConfig(projection_use_grid=False, projection_tr_x=5.0, projection_tr_y=0.0, projection_br_y=6.0)
+        services._app._config = replace(services._app._config, grid=bow_tie)
+        assert services._projection_provider() is None
 
     def test_fader_provider_returns_value_for_valid_index(
         self,

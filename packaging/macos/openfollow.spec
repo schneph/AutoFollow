@@ -236,7 +236,7 @@ exe = EXE(  # noqa: F821
     a.scripts,
     [],
     exclude_binaries=True,
-    name="OpenFollow",
+    name="AutoFollow",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -255,29 +255,29 @@ coll = COLLECT(  # noqa: F821
     a.datas,
     strip=False,
     upx=False,
-    name="OpenFollow",
+    name="AutoFollow",
 )
 
-_icon = BUILD / "OpenFollow.icns"
+_icon = BUILD / "AutoFollow.icns"
 
 app = BUNDLE(  # noqa: F821
     coll,
-    name="OpenFollow.app",
+    name="AutoFollow.app",
     icon=str(_icon) if _icon.is_file() else None,
-    bundle_identifier="app.openfollow.desktop",
+    bundle_identifier="io.github.schneph.autofollow",
     version=VERSION,
     info_plist={
-        "CFBundleName": "OpenFollow",
-        "CFBundleDisplayName": "OpenFollow",
+        "CFBundleName": "AutoFollow",
+        "CFBundleDisplayName": "AutoFollow",
         "CFBundleShortVersionString": VERSION,
         "CFBundleVersion": VERSION,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "LSApplicationCategoryType": "public.app-category.video",
-        "NSCameraUsageDescription": "OpenFollow uses connected cameras as a video source for tracking.",
-        "NSMicrophoneUsageDescription": "OpenFollow may receive audio alongside NDI / AV video sources.",
+        "NSCameraUsageDescription": "AutoFollow uses connected cameras as a video source for tracking.",
+        "NSMicrophoneUsageDescription": "AutoFollow may receive audio alongside NDI / AV video sources.",
         "NSLocalNetworkUsageDescription": (
-            "OpenFollow discovers peers and sends PSN tracking data over your local network."
+            "AutoFollow discovers peers and sends PSN tracking data over your local network."
         ),
         "NSBonjourServices": ["_http._tcp"],
     },

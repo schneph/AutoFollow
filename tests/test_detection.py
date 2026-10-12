@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import types
 from pathlib import Path
 
 import numpy as np
@@ -48,8 +49,9 @@ def test_check_detection_dependencies_reports_cv2_when_import_failed(monkeypatch
 def test_check_detection_dependencies_reports_missing_onnxruntime(monkeypatch) -> None:
     import openfollow.video.detection as detection_module
 
-    # cv2 present, onnxruntime absent – its absence is reported.
+    # cv2 present without DNN, onnxruntime absent – its absence is reported.
     monkeypatch.setattr(detection_module, "_CV2_IMPORT_ERROR", None)
+    monkeypatch.setattr(detection_module, "_opencv_dnn_available", lambda: False)
 
     def _fake_find_spec(name: str):
         return None if name == "onnxruntime" else object()
@@ -59,6 +61,36 @@ def test_check_detection_dependencies_reports_missing_onnxruntime(monkeypatch) -
     assert detection_module.check_detection_dependencies(
         DetectionConfig(model="yolov8n.onnx"),
     ) == ["onnxruntime"]
+
+
+def test_check_detection_dependencies_accepts_opencv_dnn_without_onnxruntime(monkeypatch) -> None:
+    import openfollow.video.detection as detection_module
+
+    monkeypatch.setattr(detection_module, "_CV2_IMPORT_ERROR", None)
+    monkeypatch.setattr(detection_module, "_opencv_dnn_available", lambda: True)
+    monkeypatch.setattr(
+        detection_module.importlib.util, "find_spec", lambda name: None if name == "onnxruntime" else object()
+    )
+
+    assert detection_module.check_detection_dependencies() == []
+
+
+@pytest.mark.parametrize(
+    ("cv2_module", "expected"),
+    [
+        (None, False),
+        (types.SimpleNamespace(), False),
+        (types.SimpleNamespace(dnn=types.SimpleNamespace()), False),
+        (types.SimpleNamespace(dnn=types.SimpleNamespace(readNetFromONNX="not callable")), False),
+        (types.SimpleNamespace(dnn=types.SimpleNamespace(readNetFromONNX=lambda path: path)), True),
+    ],
+    ids=["no-cv2", "no-dnn", "dnn-without-onnx", "reader-not-callable", "dnn"],
+)
+def test_opencv_dnn_available(monkeypatch, cv2_module, expected) -> None:
+    import openfollow.video.detection as detection_module
+
+    monkeypatch.setattr(detection_module, "cv2", cv2_module)
+    assert detection_module._opencv_dnn_available() is expected
 
 
 def test_check_detection_dependencies_empty_when_all_present(monkeypatch) -> None:
@@ -149,7 +181,7 @@ def test_prepare_predictions_converts_batch_channel_first_layout() -> None:
     # Real YOLOv8 ONNX output is [1, 84, 8400]. _prepare_predictions should
     # drop the batch and transpose to [N, 84] so per-row access is sane.
     raw = np.zeros((1, 84, 1000), dtype=np.float32)
-    out = detection_module._OnnxBackend._prepare_predictions(raw)
+    out = detection_module._prepare_predictions(raw)
     assert out.shape == (1000, 84)
 
 
@@ -157,7 +189,7 @@ def test_prepare_predictions_transposes_channel_first_2d() -> None:
     import openfollow.video.detection as detection_module
 
     raw = np.zeros((84, 500), dtype=np.float32)
-    out = detection_module._OnnxBackend._prepare_predictions(raw)
+    out = detection_module._prepare_predictions(raw)
     assert out.shape == (500, 84)
 
 
@@ -165,7 +197,7 @@ def test_prepare_predictions_leaves_row_major_untouched() -> None:
     import openfollow.video.detection as detection_module
 
     raw = np.zeros((1000, 84), dtype=np.float32)
-    out = detection_module._OnnxBackend._prepare_predictions(raw)
+    out = detection_module._prepare_predictions(raw)
     assert out.shape == (1000, 84)
 
 
@@ -175,8 +207,8 @@ def test_prepare_predictions_returns_empty_for_unusable_shapes() -> None:
     # 1D and 4D both miss the ``ndim == 2`` (after optional batch strip)
     # expectation and should collapse to an empty float32 array so the
     # caller's ``pred.size == 0`` guard trips safely.
-    assert detection_module._OnnxBackend._prepare_predictions(np.zeros((84,))).size == 0
-    assert detection_module._OnnxBackend._prepare_predictions(np.zeros((1, 1, 84, 100))).size == 0
+    assert detection_module._prepare_predictions(np.zeros((84,))).size == 0
+    assert detection_module._prepare_predictions(np.zeros((1, 1, 84, 100))).size == 0
 
 
 def test_to_positive_int_accepts_only_positive_ints() -> None:

@@ -141,6 +141,15 @@
                        aria-describedby="keyboard-key-prev-marker-error" aria-invalid="false">
                 <span id="keyboard-key-prev-marker-error" class="field-error"></span>
                         </div>
+                        <div class="field">
+                            <label for="keyboard-key-freeze">{{kb_labels['key_freeze']}}</label>
+                            <input id="keyboard-key-freeze" type="text" name="key_freeze"
+                                   value="{{config.controller.key_freeze}}"
+                       hx-get="/api/validate/keyboard/key_freeze" hx-trigger="blur changed delay:200ms"
+                       hx-target="#keyboard-key-freeze-error" hx-swap="innerHTML" hx-include="closest form"
+                       aria-describedby="keyboard-key-freeze-error" aria-invalid="false">
+                <span id="keyboard-key-freeze-error" class="field-error"></span>
+                        </div>
                     </div>
                 </div>
             </div>

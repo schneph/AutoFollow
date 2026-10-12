@@ -61,3 +61,11 @@ mark.
 - **Save as template… / Load template…** – store Camera and Grid together as a
   portable file. The Load chooser also lets you **Export** a template as a single
   `.oftemplate` file and **Import** one from another machine.
+
+## Projection Area
+
+Where a projector's image falls on the stage floor, for the `[u]` and `[v]` OSC placeholders that tell a media server such as Resolume where a marker sits in its output (see **OSC Transmitters**).
+
+- **Projection Covers the Grid** – the image fills the grid exactly, top edge upstage and left edge on audience left (stage right). This is the default.
+- **Top Left / Top Right / Bottom Right / Bottom Left X and Y** – used when the box above is cleared: the floor position, in stage coordinates, of each corner of the projected image as it appears in the media server's output. Measure where each corner of a full-frame test pattern lands on the floor. A keystoned or rotated image is fine, as long as the four corners go round the image in order.
+

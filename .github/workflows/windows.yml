@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 OpenFollow Project
+# Windows build: freezes the app on MSYS2 (UCRT64) and wraps it in an NSIS installer.
+name: Windows
+
+on:
+  push:
+    branches:
+      - main
+      - "windows/**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release to attach the installer to"
+        type: string
+        required: true
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  models:
+    # The quality-tier models are exported from the YOLO weights once per build;
+    # the export toolchain (torch) never ships in the installer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Export models
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install "ultralytics>=8.4.123" onnx onnxslim
+          mkdir -p models
+          for tier in n s m; do
+            python scripts/export_onnx.py "yolo26${tier}.pt" --imgsz 640 --output-dir models
+          done
+          ls -l models
+      - uses: actions/upload-artifact@v5
+        with:
+          name: models
+          path: models/*.onnx
+
+  build:
+    needs: models
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-cairo
+            mingw-w64-ucrt-x86_64-gtk3
+            mingw-w64-ucrt-x86_64-librsvg
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugin-gtk
+            mingw-w64-ucrt-x86_64-gst-libav
+            mingw-w64-ucrt-x86_64-python-numpy
+            mingw-w64-ucrt-x86_64-python-opencv
+            mingw-w64-ucrt-x86_64-python-pygame
+            mingw-w64-ucrt-x86_64-python-psutil
+            mingw-w64-ucrt-x86_64-python-packaging
+            mingw-w64-ucrt-x86_64-python-cffi
+            mingw-w64-ucrt-x86_64-hidapi
+            mingw-w64-ucrt-x86_64-pyinstaller
+            mingw-w64-ucrt-x86_64-nsis
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: models
+          path: packaging/windows/_build/models
+
+      # gcc builds the few sdist-only dependencies (netifaces for multicast-expert).
+      - name: Install AutoFollow and its Python dependencies
+        run: |
+          python --version
+          pip install --break-system-packages --ignore-requires-python --no-deps .
+          pip install --break-system-packages \
+            "pypsn @ git+https://github.com/open-stage/python-psn.git" \
+            "tomli-w>=1.0" "bottle>=0.12" "multicast-expert>=1.4" "python-osc>=1.10.2" \
+            "mido>=1.3" "mistune>=3.3.4"
+
+      - name: Freeze
+        run: pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/windows/autofollow.spec
+
+      - name: Self-check the frozen app
+        run: |
+          OPENFOLLOW_SELFCHECK=1 OPENFOLLOW_SELFCHECK_OUT="$PWD/selfcheck.txt" ./dist/AutoFollow/AutoFollow.exe; rc=$?
+          cat selfcheck.txt || true
+          exit $rc
+
+      - name: Build installer
+        run: |
+          version=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          makensis -DVERSION="$version" -DSRC="$(cygpath -w "$PWD/dist/AutoFollow")" -DLICENSE="$(cygpath -w "$PWD/LICENSE")" packaging/windows/installer.nsi
+          mkdir -p out && mv packaging/windows/AutoFollow-*-Setup.exe out/
+          ls -l out
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: AutoFollow-Windows-Setup
+          path: out/*.exe
+
+      - name: Publish to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-release-asset.sh "${{ inputs.tag || github.ref_name }}" out/*.exe

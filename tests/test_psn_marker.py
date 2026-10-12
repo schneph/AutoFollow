@@ -336,3 +336,38 @@ class TestRemoteMarker:
     def test_markers_are_local_unless_declared_remote(self) -> None:
         assert Marker(marker_id=1, name="T1").is_remote is False
         assert Marker(marker_id=1, name="T1", remote=True).is_remote is True
+
+
+def test_a_held_marker_keeps_its_position_and_status_but_stays_fresh() -> None:
+    clock = _StepClock()
+    t = Marker(marker_id=1, name="T1", clock=clock)
+    t.set_pos(1.0, 2.0, 3.0, status=0.8)
+    t.hold(True)
+    clock.now += 1000
+
+    t.set_pos(9.0, 9.0, 9.0, status=0.1)
+    t.set_status(0.0)
+
+    assert t.held
+    assert t.pos == (1.0, 2.0, 3.0)
+    assert t.status == 0.8
+    assert t.timestamp == clock.now
+
+
+def test_a_released_marker_takes_the_next_write() -> None:
+    t = Marker(marker_id=1, name="T1")
+    t.set_pos(1.0, 2.0, 3.0)
+    t.hold(True)
+    t.hold(False)
+    t.set_pos(4.0, 5.0, 6.0, status=0.5)
+    assert not t.held
+    assert t.pos == (4.0, 5.0, 6.0)
+    assert t.status == 0.5
+
+
+def test_a_marker_held_before_any_write_is_still_promoted_to_valid() -> None:
+    t = Marker(marker_id=1, name="T1")
+    t.hold(True)
+    t.set_speed(0.0, 0.0, 0.0)
+    assert t.status == 1.0
+    assert t.pos == (0.0, 0.0, 0.0)

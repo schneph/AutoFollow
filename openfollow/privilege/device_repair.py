@@ -4,10 +4,8 @@
 
 from __future__ import annotations
 
-import grp
 import logging
 import os
-import pwd
 import re
 import shutil
 import socket
@@ -16,6 +14,12 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import grp
+    import pwd
+except ImportError:  # Windows has no user database; every repair here is Linux-only.
+    grp = pwd = None  # type: ignore[assignment]
 
 from openfollow.marker_catalog.station_name import station_name_to_hostname
 from openfollow.privilege.broker import PrivilegeBroker, PrivilegeError

@@ -47,6 +47,7 @@ is Pi-only).
 | `packaging/debian/{postinst,prerm,postrm}` | Create the `openfollow` user + linger, enable/disable the units. |
 | `packaging/debian/preinst.in` + `render-preinst.sh` | On upgrade, back up the station's settings before the new files unpack (see [Settings backups](#settings-backups)). |
 | `.github/workflows/release-deb.yml` | Release CI: builds the `.deb`, signs it into an `.ofupdate` bundle, and attaches both to the release – natively per arch on GitHub-hosted `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64) runners (each inside a `debian:trixie` container). |
+| `.github/workflows/macos.yml` | Builds the Apple Silicon `.dmg` on `macos-latest` via `make dmg`; on a `v*` tag it attaches the `.dmg` to the release. |
 
 ## Install layout
 
@@ -186,8 +187,14 @@ sudo systemctl start openfollow
 
 ## Release flow
 
-`.github/workflows/release-deb.yml` triggers on a published GitHub Release (or
-`workflow_dispatch`) and builds one leg per architecture on GitHub-hosted
+AutoFollow releases carry the macOS and Windows installers. Pushing a
+`release/**` branch runs `.github/workflows/release.yml`: it drafts
+`v<pyproject version>` with `.github/release-notes.md`, runs
+`.github/workflows/macos.yml` and `.github/workflows/windows.yml`, which attach
+their installers through `scripts/publish-release-asset.sh`, and publishes the
+release once both are on it. Pushing a `v*` tag attaches the installers too.
+
+`.github/workflows/release-deb.yml` runs only by `workflow_dispatch` and builds one leg per architecture on GitHub-hosted
 `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64) runners (each in a
 `debian:trixie` container). Each leg wraps its `.deb` in a **signed update bundle**
 and attaches both the bundle and the raw `.deb` to the release, so a release
@@ -503,7 +510,7 @@ Everything lives under [`packaging/macos/`](../packaging/macos/):
 # One-time host tools (in addition to the documented macOS dev setup):
 brew install librsvg create-dmg
 
-make dmg            # -> dist/OpenFollow-<version>-<arch>.dmg
+make dmg            # -> dist/AutoFollow-<version>-<arch>.dmg
 ```
 
 `make dmg` is macOS-only, installs the optional `package-macos` Poetry group plus
@@ -588,7 +595,7 @@ The `.app` is **ad-hoc signed, not notarized**. macOS quarantines it on first
 download, so the operator must clear the quarantine flag once:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/OpenFollow.app"
+xattr -dr com.apple.quarantine "/Applications/AutoFollow.app"
 # or: right-click the app -> Open -> Open
 ```
 
@@ -617,3 +624,40 @@ install either: the bundle's GStreamer scan is confined to its own `gst_plugins/
 so a system `ndisrc` is never picked up.) NDI input remains available on the
 Raspberry Pi build; receiving NDI on macOS would need a separate, NDI-licensed
 build, which is out of scope for the developer DMG.
+
+## Windows installer
+
+The Windows build is made by `.github/workflows/windows.yml` on every push to
+`main`, every `windows/**` branch and every pull request; a `v*` tag also attaches
+the installer to that release. Download it from the run's **AutoFollow-Windows-Setup**
+artifact.
+
+### Files (Windows)
+
+| File | Role |
+| --- | --- |
+| `packaging/windows/autofollow.spec` | PyInstaller spec, frozen from MSYS2 UCRT64 Python |
+| `packaging/windows/config.seed.toml` | First-run defaults copied to `%APPDATA%\AutoFollow\config.toml` |
+| `packaging/windows/installer.nsi` | NSIS installer: Program Files, Start menu + desktop shortcuts, uninstaller |
+| `packaging/macos/launcher.py`, `runtime_hook.py` | Shared with the macOS bundle; both branch on `sys.platform` |
+
+### How it is built
+
+1. An Ubuntu job exports the Fastest / Fast / Balanced YOLO26 models with
+   `scripts/export_onnx.py`; torch never ships in the installer.
+2. The Windows job installs GTK 3, GStreamer (with `gtksink`, `mfvideosrc` and
+   libav), PyGObject, NumPy and OpenCV from MSYS2, then the pure-Python
+   dependencies with pip. MSYS2 has no pygame-ce or python-rtmidi build: the classic
+   pygame stands in for gamepads, and MIDI input is unavailable on Windows. MSYS2's
+   onnxruntime package installs no Python extension, so detection runs on OpenCV's
+   DNN module instead (same models, same results).
+3. PyInstaller freezes `dist\AutoFollow`, the frozen app runs its self-check
+   (`OPENFOLLOW_SELFCHECK=1`, verdict written to `OPENFOLLOW_SELFCHECK_OUT`, which
+   includes running a bundled model on OpenCV DNN), and
+   `makensis` wraps it into `AutoFollow-<version>-Setup.exe`.
+
+The installer is not code-signed, so SmartScreen shows "Windows protected your PC"
+on first run: choose **More info → Run anyway**. Settings in `%APPDATA%\AutoFollow`
+survive an uninstall and reinstall. The webcam input is **USB Camera (Windows)**
+(`video/inputs/mf.py`), and **Open Web UI** opens the default browser at
+`http://localhost:8080`.

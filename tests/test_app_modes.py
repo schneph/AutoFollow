@@ -2562,6 +2562,7 @@ def _idle_update_result() -> SimpleNamespace:
         next_marker_pressed=False,
         prev_marker_pressed=False,
         clear_messages_pressed=False,
+        freeze_pressed=False,
     )
 
 

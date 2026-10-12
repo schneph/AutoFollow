@@ -131,7 +131,7 @@ build:
 	poetry build --no-interaction
 
 # Build the self-contained macOS .app and wrap it in a .dmg
-# (dist/OpenFollow-<version>-<arch>.dmg). macOS-only, NOT part of `make ci`
+# (dist/AutoFollow-<version>-<arch>.dmg). macOS-only, NOT part of `make ci`
 # (heavy: bundles the detection + export toolchains incl. torch, ~2 GB output).
 # One-time host setup: `brew install librsvg create-dmg`. The pipeline and the
 # Gatekeeper caveat live in packaging/macos/build-dmg.sh + docs/PACKAGING.md.
