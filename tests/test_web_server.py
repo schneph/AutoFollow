@@ -5695,6 +5695,66 @@ def test_follow_points_the_spotlight_at_a_controlled_performer_only(live_server,
         assert 'hx-post="/section/detection/follow/1"' in body
 
 
+def test_performers_panel_offers_a_swap_on_every_performer(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, tracking=(1, 2))
+    _, body = _get(base, "/section/detection/performers")
+    assert 'hx-post="/section/detection/swap/1"' in body
+    assert 'hx-post="/section/detection/swap/2"' in body
+    assert "data-swap-from" not in body
+
+
+def test_performers_panel_with_one_performer_offers_no_swap(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    cfg = load_config(server.config_path)
+    cfg.controlled_marker_ids = [1, 3]
+    save_config(cfg, server.config_path)
+    _, body = _get(base, "/section/detection/performers")
+    assert "/section/detection/swap/" not in body
+
+
+def test_picking_a_performer_to_swap_offers_the_others(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server, followed=1)
+
+    status, body = _post_form(base, "/section/detection/swap/1", {})
+
+    assert status == 200
+    assert 'data-swap-from="1"' in body
+    assert 'hx-post="/section/detection/swap/1/2"' in body
+    assert 'hx-get="/section/detection/performers"' in body  # Cancel on the picked row
+    # Follow buttons step aside while a swap is being picked.
+    assert "/section/detection/follow/" not in body
+
+
+@pytest.mark.parametrize("first", ["3", "9"])
+def test_picking_a_non_performer_to_swap_changes_nothing(live_server, first: str) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    _, body = _post_form(base, f"/section/detection/swap/{first}", {})
+    assert "data-swap-from" not in body
+
+
+def test_swapping_two_performers_queues_it_for_the_main_loop(live_server) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+
+    status, body = _post_form(base, "/section/detection/swap/2/1", {})
+
+    assert status == 200
+    assert server._command_queue.consume_performer_swaps() == [(2, 1)]
+    assert "data-swap-from" not in body
+
+
+@pytest.mark.parametrize("path", ["1/1", "1/3", "9/1"])
+def test_a_swap_that_is_not_two_performers_is_not_queued(live_server, path: str) -> None:
+    server, base = live_server
+    _spotlight_server(server)
+    _post_form(base, f"/section/detection/swap/{path}", {})
+    assert server._command_queue.consume_performer_swaps() == []
+
+
 def test_update_detection_tracking_off_disables_and_keeps_last_mode(live_server) -> None:
     """``tracking_state=off`` disables detection but leaves ``pin_mode`` intact
     so re-enabling restores the operator's last mode."""

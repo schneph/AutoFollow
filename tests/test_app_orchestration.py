@@ -136,6 +136,7 @@ def _make_fake_app(
         _check_diagnostics_export=_recorder("check_diagnostics_export"),
         _check_button_detection_request=_recorder("check_button_detection_request"),
         _check_controller_slot_actions=_recorder("check_controller_slot_actions"),
+        _check_performer_swaps=_recorder("check_performer_swaps"),
         _check_camera_setup_requests=_recorder("check_camera_setup_requests"),
         _check_marker_speeds_persist=_recorder("check_marker_speeds_persist"),
         _check_frame_loop_stall=_recorder("check_frame_loop_stall"),
@@ -275,6 +276,7 @@ class TestHousekeeping:
             "check_diagnostics_export",
             "check_button_detection_request",
             "check_controller_slot_actions",
+            "check_performer_swaps",
             "check_camera_setup_requests",
             "check_marker_speeds_persist",
             # The stall watchdog belongs here and not on the frame clock: a
@@ -302,6 +304,7 @@ class TestHousekeeping:
             "check_diagnostics_export",
             "check_button_detection_request",
             "check_controller_slot_actions",
+            "check_performer_swaps",
             "check_camera_setup_requests",
             "check_marker_speeds_persist",
             "check_frame_loop_stall",

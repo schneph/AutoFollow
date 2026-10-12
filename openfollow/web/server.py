@@ -839,6 +839,10 @@ class ConfigWebServer:
         """Queue a controller-slot action (``identify`` / ``forget``) for the main loop."""
         self._command_queue.request_slot_action(action, index, ref)
 
+    def request_performer_swap(self, first: int, second: int) -> None:
+        """Queue a swap of two All Performers markers' people for the main loop."""
+        self._command_queue.request_performer_swap(first, second)
+
     def whats_new_pending(self) -> bool:
         """True when the page should open the updater's What's new step."""
         return self._command_queue.whats_new_pending()

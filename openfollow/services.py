@@ -241,6 +241,8 @@ class WebCommandQueue:
         # loop, which owns the slots.
         self._slot_actions_lock = threading.Lock()
         self._slot_actions: list[tuple[str, int, str]] = []
+        self._performer_swaps_lock = threading.Lock()
+        self._performer_swaps: list[tuple[int, int]] = []
         # The web camera setup changes a Pi camera live: the main loop stops the
         # Pi Camera pipeline before an overlay is unloaded, and rebuilds it after.
         self._camera_release_requested = threading.Event()
@@ -337,6 +339,17 @@ class WebCommandQueue:
         with self._slot_actions_lock:
             actions, self._slot_actions = self._slot_actions, []
         return actions
+
+    def request_performer_swap(self, first: int, second: int) -> None:
+        """Queue a swap of the people two All Performers markers follow."""
+        with self._performer_swaps_lock:
+            self._performer_swaps.append((first, second))
+
+    def consume_performer_swaps(self) -> list[tuple[int, int]]:
+        """Take every queued performer swap, oldest first."""
+        with self._performer_swaps_lock:
+            swaps, self._performer_swaps = self._performer_swaps, []
+        return swaps
 
     def release_camera(self, timeout: float) -> bool:
         """Web thread: have the main loop stop the Pi Camera pipeline; ``True`` once it has.
