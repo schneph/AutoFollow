@@ -54,6 +54,7 @@ from openfollow.configuration import (
 )
 from openfollow.osc.template import (
     CompiledTemplate,
+    ProjectionResolver,
     RenderContext,
     RenderError,
     compile_template,
@@ -212,6 +213,9 @@ MarkerProvider = Callable[[int], "Marker | None"]
 # ``[z.frac.inv]`` rows require ``max_height > 0`` at render time, else
 # the renderer raises ``RenderError`` and the ring buffer records the skip.
 GridProvider = Callable[[], tuple[float, float, float, float]]
+# ``projection_provider()`` returns the live floor-to-image mapping for
+# ``[u]`` / ``[v]``, or ``None`` while the projection area is unusable.
+ProjectionProvider = Callable[[], ProjectionResolver | None]
 # Fader resolver for the fader family (``[fader]`` / ``[fader.scale:min-max]``
 # / ``[fader.int:min-max]``).
 # ``fader_provider(idx)`` returns the fader's current 0..1 value or
@@ -369,10 +373,12 @@ class OscTransmitterManager:
         controller_marker_provider: ControllerMarkerProvider | None = None,
         controlled_markers_provider: ControlledMarkersProvider | None = None,
         egress_provider: EgressProvider | None = None,
+        projection_provider: ProjectionProvider | None = None,
     ) -> None:
         self._service = osc_service
         self._marker_provider = marker_provider
         self._grid_provider = grid_provider
+        self._projection_provider = projection_provider
         # Optional so call sites that don't wire the virtual fader bus
         # still construct the manager. A fader-placeholder row without it
         # raises :class:`RenderError` at render time and skips.
@@ -1390,6 +1396,7 @@ class OscTransmitterManager:
             event_value=plan.event_value,
             event_velocity=plan.event_velocity,
             event_note=plan.event_note,
+            projection=self._projection_provider() if self._projection_provider is not None else None,
         )
         try:
             address = render(plan.compiled_address, rc)

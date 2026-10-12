@@ -33,6 +33,7 @@ from openfollow.net_adapters import display_name
 from openfollow.net_egress import Egress, is_loopback_host, resolve_egress
 from openfollow.net_utils import ResolveStatus, interface_present, plane_source_iface
 from openfollow.osc.egress import OscEgressTable
+from openfollow.osc.template import ProjectionResolver
 from openfollow.otp import OtpServer
 from openfollow.psn import MARKER_STALE_AFTER_S, PsnReceiver, PsnServer
 from openfollow.psn.server import _UNCHANGED, _Unchanged
@@ -56,6 +57,7 @@ from openfollow.runtime.services_marker_visuals import (
 )
 from openfollow.runtime_metrics import FrameMetrics, OverlayStatePool
 from openfollow.scene.camera import Camera
+from openfollow.scene.projection import floor_projection, projection_corners
 from openfollow.system_stats import SystemStatsCollector
 from openfollow.video.failure import ConnectionPhase, VideoFailure, failure_action, failure_sentence
 from openfollow.video.overlay import CairoOverlayRenderer
@@ -712,6 +714,8 @@ class AppRuntimeServices:
         self._last_zone_eval: float = 0.0
         # Reused buffers for detection-to-world unprojection during zone eval
         self._zone_cam_buffer = np.zeros(7, dtype=np.float64)
+        self._projection_corners: list[tuple[float, float]] | None = None
+        self._projection: ProjectionResolver | None = None
         self._zone_screen_buffer = np.zeros((1, 2), dtype=np.float64)
 
         # Shared status flags surfaced by the operator-screen badge. A
@@ -1724,6 +1728,7 @@ class AppRuntimeServices:
             egress_provider=self._osc_egress.for_destination,
             marker_provider=self._marker_provider,
             grid_provider=self._grid_provider,
+            projection_provider=self._projection_provider,
             # Fader placeholders resolve through the bus. The MIDI / fader
             # subscriptions are attached just below (after ``restart``
             # populates the row list) so an early event never arrives at
@@ -1928,6 +1933,15 @@ class AppRuntimeServices:
                 }
             )
         return out
+
+    def _projection_provider(self) -> ProjectionResolver | None:
+        """The live floor-to-image mapping for ``[u]`` / ``[v]``, rebuilt when the area changes."""
+        corners = projection_corners(self._app._config.grid)
+        if corners != self._projection_corners:
+            projection = floor_projection(corners)
+            self._projection = projection.uv if projection is not None else None
+            self._projection_corners = corners
+        return self._projection
 
     def _grid_provider(self) -> tuple[float, float, float, float]:
         """Snapshot the current grid dimensions for fractional placeholders.

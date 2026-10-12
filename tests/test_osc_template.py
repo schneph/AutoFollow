@@ -87,6 +87,8 @@ def test_placeholder_set_is_the_unified_sources() -> None:
         "x",
         "y",
         "z",
+        "u",
+        "v",
         "markerid",
         "fader",
         "markerfader",

@@ -61,6 +61,7 @@ _POSITION_RE = _extract_js_regex(_SOURCE, "OSC_POSITION_RE")
 _MARKERID_RE = _extract_js_regex(_SOURCE, "OSC_MARKERID_RE")
 _FADER_RE = _extract_js_regex(_SOURCE, "OSC_FADER_RE")
 _MARKERFADER_RE = _extract_js_regex(_SOURCE, "OSC_MARKERFADER_RE")
+_PROJECTION_RE = _extract_js_regex(_SOURCE, "OSC_PROJECTION_RE")
 _EVENT_RE = _extract_js_regex(_SOURCE, "OSC_EVENT_RE")
 _PILL_RE = _extract_js_regex(_SOURCE, "OSC_PILL_RE")
 
@@ -75,6 +76,7 @@ def _client_recognises(token: str) -> bool:
         or _MARKERID_RE.match(token)
         or _FADER_RE.match(token)
         or _MARKERFADER_RE.match(token)
+        or _PROJECTION_RE.match(token)
         or _EVENT_RE.match(token),
     )
 
@@ -87,6 +89,10 @@ def _server_recognises(token: str) -> bool:
 
 # Representative valid tokens both sides must accept.
 _RECOGNISED = [
+    "[u]",
+    "[v:3]",
+    "[u:c2.pct]",
+    "[v.inv.int:0-1080]",
     "[x]",
     "[y]",
     "[z]",
@@ -137,6 +143,7 @@ _NOT_RECOGNISED = [
     # removed legacy spellings
     "[fx]",
     "[ix]",
+    "[u.frac]",  # position transforms are not projection ones
     "[ifz]",
     "[markerId]",
     "[float]",

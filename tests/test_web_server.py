@@ -6474,6 +6474,34 @@ def test_update_grid_post_toggles_visible(live_server) -> None:
     assert load_config(server.config_path).grid.visible is True
 
 
+def test_update_grid_post_saves_the_projection_area(live_server) -> None:
+    """The Projection Area corners save from the grid form; unticking Use Grid keeps them."""
+    server, base = live_server
+    status, _ = _post_form(
+        base,
+        "/section/grid",
+        {"width": "10", "projection_tl_x": "-7", "projection_tl_y": "8.5", "projection_br_x": "3"},
+    )
+    assert status == 200
+    saved = load_config(server.config_path).grid
+    assert saved.projection_use_grid is False
+    assert (saved.projection_tl_x, saved.projection_tl_y, saved.projection_br_x) == (-7.0, 8.5, 3.0)
+
+    status, _ = _post_form(base, "/section/grid", {"width": "10", "projection_use_grid": "on"})
+    assert status == 200
+    assert load_config(server.config_path).grid.projection_use_grid is True
+
+
+def test_grid_section_renders_the_projection_area(live_server) -> None:
+    _, base = live_server
+    status, body = _get(base, "/section/grid")
+    assert status == 200
+    assert 'name="projection_use_grid"' in body
+    for corner in ("tl", "tr", "br", "bl"):
+        for axis in ("x", "y"):
+            assert f'name="projection_{corner}_{axis}"' in body
+
+
 def test_update_marker_post_persists_visual_booleans(live_server) -> None:
     """POST /section/marker exercises the longest bool-fields list in the
     routes module. Boxes ticked → True, omitted → False."""
