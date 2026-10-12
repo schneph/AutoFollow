@@ -3216,6 +3216,19 @@ def test_detection_config_clamps_reacquire_radius(bad_radius: object, expected: 
     assert cfg.reacquire_radius_m == pytest.approx(expected)
 
 
+def test_detection_config_speed_response_defaults_off() -> None:
+    assert DetectionConfig().speed_response == 0.0
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(2.5, 2.5), (-1.0, 0.0), (50.0, 10.0), ("fast", 0.0), (None, 0.0), (float("nan"), 0.0)],
+)
+def test_detection_config_clamps_speed_response(raw: object, expected: float) -> None:
+    cfg = DetectionConfig(speed_response=raw)  # type: ignore[arg-type]
+    assert cfg.speed_response == pytest.approx(expected)
+
+
 def test_detection_config_spotlight_defaults_off() -> None:
     cfg = DetectionConfig()
     assert (cfg.spotlight_marker_id, cfg.followed_marker_id) == (-1, -1)

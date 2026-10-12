@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -219,6 +220,26 @@ def _load_camera_params(app: Any, buffer: npt.NDArray[Any]) -> npt.NDArray[Any]:
     return buffer
 
 
+def adaptive_alpha(smoothing: float, speed_response: float, speed_mps: float) -> float:
+    """One-Euro filter cutoff as a per-nominal-frame EMA alpha.
+
+    ``smoothing`` is the alpha at rest; the cutoff frequency then rises by
+    ``speed_response`` Hz per m/s, so a still performer stays steady and a fast
+    one is followed with little lag. ``speed_response <= 0`` returns ``smoothing``.
+    """
+    if speed_response <= 0.0 or smoothing >= 1.0:
+        return smoothing
+    # alpha = k / (1 + k) with k = 2*pi*cutoff*Te, so the rest cutoff is a / (1 - a).
+    k = smoothing / (1.0 - smoothing) + 2.0 * math.pi * NOMINAL_FRAME_DT * speed_response * speed_mps
+    return k / (1.0 + k)
+
+
+def _smoothing_alpha(cfg: Any, pin_state: DetectionPinState) -> float:
+    """The marker's per-nominal-frame alpha at its current estimated speed."""
+    speed_mps = math.hypot(pin_state.vel_x, pin_state.vel_y) / NOMINAL_FRAME_DT
+    return adaptive_alpha(cfg.detection.smoothing, cfg.detection.speed_response, speed_mps)
+
+
 def _advance_smoothing(
     pin_state: DetectionPinState,
     target_x: float,
@@ -226,7 +247,7 @@ def _advance_smoothing(
     cfg: Any,
     dt: float = NOMINAL_FRAME_DT,
 ) -> tuple[float, float]:
-    """Velocity-EMA + prediction lookahead + EMA smoothing of a world target.
+    """Velocity-EMA + prediction lookahead + adaptive EMA smoothing of a world target.
 
     Mutates ``pin_state`` and returns the smoothed ``(x, y)``. Shared by both pin
     modes so the filter stays identical; tune it once, here. ``dt`` (seconds since
@@ -262,7 +283,7 @@ def _advance_smoothing_steps(
     predicted_x = target_x + pin_state.vel_x * prediction
     predicted_y = target_y + pin_state.vel_y * prediction
 
-    alpha = ema_factor(cfg.detection.smoothing, steps)
+    alpha = ema_factor(_smoothing_alpha(cfg, pin_state), steps)
     if pin_state.smooth_x is None or pin_state.smooth_y is None:
         pin_state.smooth_x = predicted_x
         pin_state.smooth_y = predicted_y
@@ -551,7 +572,7 @@ def _assist_one(
     # Outer glide: ease the AI marker toward this frame's target. Seeded once
     # from the registered marker's pos; never reset → the output never snaps. The
     # glide rate is frame-rate-independent (re-derived from the shared ``steps``).
-    glide = ema_factor(cfg.detection.smoothing, steps)
+    glide = ema_factor(_smoothing_alpha(cfg, state), steps)
     if state.ai_smooth_x is None or state.ai_smooth_y is None:
         out_x, out_y, _ = out_marker.pos
         state.ai_smooth_x = out_x
