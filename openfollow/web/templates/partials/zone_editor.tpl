@@ -589,6 +589,15 @@
         }
         html += '      </select></div>';
         html += '    </div>';
+        html += '    <div class="row zone-desk-preset">';
+        html += '      <div class="field"><label for="zone-magicq-playback">MagicQ Playback</label>'
+              + '<input type="number" id="zone-magicq-playback" min="1" max="999" step="1" placeholder="1"></div>';
+        html += '      <div class="field"><label for="zone-magicq-cue">MagicQ Cue</label>'
+              + '<input type="text" id="zone-magicq-cue" inputmode="decimal" placeholder="go"></div>';
+        html += '      <div class="field"><label>&nbsp;</label>'
+              + '<button type="button" class="secondary" id="zone-magicq-fill">Fill MagicQ Cues</button></div>';
+        html += '    </div>';
+        html += '    <p class="field-error" id="zone-magicq-error" aria-live="polite"></p>';
         html += '    <div class="row">';
         html += oscField('First Entry Address', 'osc_address_first_entry', z.osc_address_first_entry || '', '/zone/enter');
         html += oscField('Additional Entry Address', 'osc_address_additional_entry', z.osc_address_additional_entry || '', '/zone/count');
@@ -664,7 +673,31 @@
         bindOscFieldValidators();
         bindTriggeredByValidator();
         bindZoneTestSendButtons();
+        bindMagicqPreset();
         renderZoneDiagnostics(z);
+    }
+
+    // Fills the entry / exit addresses from the station's MagicQ preset; Save Zone keeps them.
+    function bindMagicqPreset() {
+        var btn = document.getElementById('zone-magicq-fill');
+        if (!btn) return;
+        btn.addEventListener('click', function() {
+            var errEl = document.getElementById('zone-magicq-error');
+            var url = '/api/zones/preset/magicq?playback='
+                + encodeURIComponent(document.getElementById('zone-magicq-playback').value)
+                + '&cue=' + encodeURIComponent(document.getElementById('zone-magicq-cue').value);
+            fetch(url, {cache: 'no-store'})
+                .then(function(r) { return r.json().then(function(body) { return {ok: r.ok, body: body}; }); })
+                .then(function(res) {
+                    if (!res.ok) { errEl.textContent = res.body.error || ''; return; }
+                    errEl.textContent = '';
+                    Object.keys(res.body).forEach(function(name) {
+                        var inp = detailsEl.querySelector('[data-zone-osc-field="' + name + '"]');
+                        if (inp) inp.value = res.body[name];
+                    });
+                })
+                .catch(function() { errEl.textContent = 'The station did not answer.'; });
+        });
     }
 
     // triggered_by shares per-zone validation

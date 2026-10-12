@@ -49,6 +49,7 @@ One editable row per polygon vertex, labelled V1, V2, … to match the canvas ha
 The four OSC messages the zone fires on occupancy transitions. Leave any address blank to suppress that event.
 
 - **OSC Destination** – the shared connection (host, port, transport) this zone's messages go to, picked from the list you maintain under **OSC Destinations**. A zone with no destination selected emits nothing. Edit the destination's IP once and every referencing zone and transmitter repoints live.
+- **MagicQ Playback / MagicQ Cue** and **Fill MagicQ Cues** – fills the addresses for a ChamSys MagicQ desk: the first person into the zone goes that playback (or jumps it to the cue, such as `3` or `2.5`, when one is given) and the last one out releases it. It fills **First Entry** and **Final Exit** and leaves the other two as they are; press **Save Zone** to keep them. On the desk, switch OSC on under Setup, View Settings, Network, set its receive port (8000 is usual) and use that port on this zone's **OSC Destination**.
 - **First Entry Address** – sent on empty → occupied (0 → 1 occupant). E.g. trigger a cue or raise an audio bus.
 - **Additional Entry Address** – sent when another occupant enters an already-occupied zone (n → n+1). E.g. increment a counter or layer an effect.
 - **Partial Exit Address** – sent when one occupant leaves but the zone stays occupied (n+1 → n, n ≥ 1). E.g. decrement a counter.
