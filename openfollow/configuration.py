@@ -627,6 +627,19 @@ class DetectionMaskConfig:
         self.vertices = cleaned
 
 
+SPOTLIGHT_COUNT = 3
+
+
+def spotlight_field(number: int) -> str:
+    """The ``DetectionConfig`` field holding spot ``number``'s marker (1-based)."""
+    return "spotlight_marker_id" if number == 1 else f"spotlight{number}_marker_id"
+
+
+def followed_field(number: int) -> str:
+    """The ``DetectionConfig`` field holding the performer marker spot ``number`` follows."""
+    return "followed_marker_id" if number == 1 else f"followed{number}_marker_id"
+
+
 @dataclass
 class DetectionConfig:
     enabled: bool = False
@@ -670,6 +683,11 @@ class DetectionConfig:
     spotlight_marker_id: int = -1
     # Multi mode: the performer marker the spotlight mirrors; ``-1`` = none.
     followed_marker_id: int = -1
+    # Spots 2 and 3, each its own marker following its own performer.
+    spotlight2_marker_id: int = -1
+    followed2_marker_id: int = -1
+    spotlight3_marker_id: int = -1
+    followed3_marker_id: int = -1
     # Master on/off for region-of-interest masking. When False (default) the
     # masks below are inactive and detection runs over the whole frame even if
     # masks are drawn; True confines detection to the union of enabled masks.
@@ -709,6 +727,9 @@ class DetectionConfig:
         self.reacquire_radius_m = _coerce_float(self.reacquire_radius_m, 1.5, lo=0.0, hi=50.0)
         self.spotlight_marker_id = _coerce_int(self.spotlight_marker_id, -1, lo=-1)
         self.followed_marker_id = _coerce_int(self.followed_marker_id, -1, lo=-1)
+        for number in range(2, SPOTLIGHT_COUNT + 1):
+            for name in (spotlight_field(number), followed_field(number)):
+                setattr(self, name, _coerce_int(getattr(self, name), -1, lo=-1))
         self.masks_enabled = _coerce_bool(self.masks_enabled, False)
         # Convert dict entries (hand-edited TOML / imported config) to
         # dataclasses and drop non-object entries, so the detector thread can

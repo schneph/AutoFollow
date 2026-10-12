@@ -318,7 +318,7 @@ class TestDrawDetections:
             detection_box_thickness=2,
             detection_attached_colors={1: "#ff0000", 2: "#00ff00"},
             detection_attached_labels={1: "Lead", 2: "M2"},
-            detection_followed_track_id=2,
+            detection_followed_track_ids=frozenset({2}),
         )
         state.detections = [
             DetectionBox(x1=0.0, y1=0.2, x2=0.1, y2=0.4, confidence=0.5, track_id=1),

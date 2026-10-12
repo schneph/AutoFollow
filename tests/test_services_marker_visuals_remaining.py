@@ -1897,11 +1897,11 @@ class TestAttachedDetectionBox:
 
 
 class TestAllPerformersSpotlight:
-    def _app(self, *, spot: int = 3, followed: int = 1) -> SimpleNamespace:
+    def _app(self, *, spot: int = 3, followed: int = 1, ids: tuple[int, ...] = (1, 2, 3)) -> SimpleNamespace:
         app = _build_app(
-            controlled=[1, 2, 3],
-            viewer=[1, 2, 3],
-            server_markers={mid: _FakeMarker(mid, pos=(float(mid), 0.0, 0.0)) for mid in (1, 2, 3)},
+            controlled=list(ids),
+            viewer=list(ids),
+            server_markers={mid: _FakeMarker(mid, pos=(float(mid), 0.0, 0.0)) for mid in ids},
         )
         app._marker_catalog = _FakeCatalog({1: ("Lead", "#0652dd"), 2: ("", "#ff0000")})
         det = app._config.detection
@@ -1916,7 +1916,7 @@ class TestAllPerformersSpotlight:
     def test_each_performer_box_is_named_and_the_followed_one_marked(self, pool: OverlayStatePool) -> None:
         state = _build(self._app(), pool, person_detector=SimpleNamespace(detections=[]))
         assert state.detection_attached_labels == {4: "Lead", 7: "M2"}
-        assert state.detection_followed_track_id == 4
+        assert state.detection_followed_track_ids == frozenset({4})
 
     def test_cards_tag_the_spotlight_and_the_performer_it_follows(self, pool: OverlayStatePool) -> None:
         state = _build(self._app(), pool, person_detector=SimpleNamespace(detections=[]))
@@ -1933,13 +1933,39 @@ class TestAllPerformersSpotlight:
     def test_a_spotlight_following_nobody_is_tagged_alone(self, pool: OverlayStatePool, followed: int) -> None:
         state = _build(self._app(followed=followed), pool, person_detector=SimpleNamespace(detections=[]))
         assert {m.marker_id: m.follow_tag for m in state.markers} == {1: "", 2: "", 3: "SPOT"}
-        assert state.detection_followed_track_id is None
+        assert state.detection_followed_track_ids == frozenset()
 
     def test_without_a_spotlight_boxes_are_named_but_nothing_is_followed(self, pool: OverlayStatePool) -> None:
         state = _build(self._app(spot=-1), pool, person_detector=SimpleNamespace(detections=[]))
         assert state.detection_attached_labels == {4: "Lead", 7: "M2"}
-        assert state.detection_followed_track_id is None
+        assert state.detection_followed_track_ids == frozenset()
         assert all(not m.follow_tag for m in state.markers)
+
+    def test_with_several_spotlights_each_tag_carries_its_number(self, pool: OverlayStatePool) -> None:
+        app = self._app(ids=(1, 2, 3, 4, 5))
+        det = app._config.detection
+        det.spotlight2_marker_id, det.followed2_marker_id = 4, 1
+        det.spotlight3_marker_id, det.followed3_marker_id = 5, 2
+        state = _build(app, pool, person_detector=SimpleNamespace(detections=[]))
+        assert {m.marker_id: m.follow_tag for m in state.markers} == {
+            1: "FOLLOWED 1+2",
+            2: "FOLLOWED 3",
+            3: "SPOT 1 > Lead",
+            4: "SPOT 2 > Lead",
+            5: "SPOT 3 > M2",
+        }
+        assert state.detection_followed_track_ids == frozenset({4, 7})
+
+    def test_a_numbered_spot_following_nobody_is_tagged_with_its_number(self, pool: OverlayStatePool) -> None:
+        app = self._app(ids=(1, 2, 3, 4))
+        app._config.detection.spotlight2_marker_id = 4
+        state = _build(app, pool, person_detector=SimpleNamespace(detections=[]))
+        assert {m.marker_id: m.follow_tag for m in state.markers} == {
+            1: "FOLLOWED 1",
+            2: "",
+            3: "SPOT 1 > Lead",
+            4: "SPOT 2",
+        }
 
     def test_other_modes_leave_boxes_unnamed(self, pool: OverlayStatePool) -> None:
         app = self._app()

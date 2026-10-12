@@ -21,7 +21,7 @@ from openfollow.runtime.overlay_state import (
     OverlayState,
     VirtualFaderDisplayData,
 )
-from openfollow.runtime.services_detection_pin import is_assist_controlled, spotlight_marker_id
+from openfollow.runtime.services_detection_pin import is_assist_controlled, spotlights
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.runtime_metrics import OverlayStatePool
 from openfollow.station_fqdn import web_ui_host
@@ -195,14 +195,27 @@ def _marker_label(app: Any, marker_id: int) -> str:
 
 
 def _follow_tags(app: Any) -> dict[int, str]:
-    """Card tags naming the All Performers spotlight and the performer it follows."""
-    spot = spotlight_marker_id(app)
-    if spot is None:
-        return {}
-    followed = app._config.detection.followed_marker_id
-    if followed < 0 or followed == spot or followed not in app._controlled_ids:
-        return {spot: "SPOT"}
-    return {spot: f"SPOT > {_marker_label(app, followed)}", followed: "FOLLOWED"}
+    """Card tags naming each All Performers spotlight and the performer it follows.
+
+    With one spotlight the tags read ``SPOT`` / ``FOLLOWED``; with several each
+    carries its number (``SPOT 2 > Lead``, ``FOLLOWED 1+2``).
+    """
+    spots = spotlights(app)
+    spot_ids = {s.marker_id for s in spots}
+    numbered = len(spots) > 1
+    tags: dict[int, str] = {}
+    followers: dict[int, list[str]] = {}
+    for spot in spots:
+        name = f"SPOT {spot.number}" if numbered else "SPOT"
+        followed = spot.followed_marker_id
+        if followed < 0 or followed in spot_ids or followed not in app._controlled_ids:
+            tags[spot.marker_id] = name
+            continue
+        tags[spot.marker_id] = f"{name} > {_marker_label(app, followed)}"
+        followers.setdefault(followed, []).append(str(spot.number))
+    for followed, numbers in followers.items():
+        tags[followed] = f"FOLLOWED {'+'.join(numbers)}" if numbered else "FOLLOWED"
+    return tags
 
 
 def sync_marker_config(state: OverlayState, cfg: Any) -> None:
@@ -745,9 +758,9 @@ def build_marker_visual_state(
         # drives every controlled marker, so several boxes can be attached.
         attached_colors: dict[int, str] = {}
         attached_labels: dict[int, str] = {}
-        followed_track: int | None = None
+        followed_tracks: set[int] = set()
         multi = dc.pin_mode == "multi"
-        spot = spotlight_marker_id(app)
+        followed_ids = {s.followed_marker_id for s in spotlights(app)}
         for st in app._detection_pin_states.values():
             if st.attached_track_id is not None and st.attached_marker_id is not None:
                 attached_colors[st.attached_track_id] = _resolve_marker_color(app, st.attached_marker_id)
@@ -755,11 +768,11 @@ def build_marker_visual_state(
                     # Name each performer's box after its marker so the operator
                     # can tell who is who and pick whom the spotlight follows.
                     attached_labels[st.attached_track_id] = _marker_label(app, st.attached_marker_id)
-                    if spot is not None and st.attached_marker_id == dc.followed_marker_id:
-                        followed_track = st.attached_track_id
+                    if st.attached_marker_id in followed_ids:
+                        followed_tracks.add(st.attached_track_id)
         state.detection_attached_colors = attached_colors
         state.detection_attached_labels = attached_labels
-        state.detection_followed_track_id = followed_track
+        state.detection_followed_track_ids = frozenset(followed_tracks)
 
     if app._button_detection is not None:
         state.button_detection = app._button_detection.get_state()

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
+from openfollow.configuration import SPOTLIGHT_COUNT, followed_field, spotlight_field
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT, dt_steps, ema_factor
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.scene.solver import invert_overlay_distortion, unproject_to_plane
@@ -598,19 +599,39 @@ _SPOT_GLIDE = 0.2
 _SPOT_LOCK_M = 0.05
 
 
-def spotlight_marker_id(app: Any) -> int | None:
-    """The All Performers spotlight marker when one is configured and controlled, else None."""
+@dataclass(frozen=True)
+class Spotlight:
+    """One configured All Performers spotlight: its number (1-based), marker, and followed performer."""
+
+    number: int
+    marker_id: int
+    followed_marker_id: int
+
+
+def spotlights(app: Any) -> list[Spotlight]:
+    """Every configured, controlled spotlight in number order; a marker named twice counts once."""
     det = app._config.detection
     if not det.enabled or det.pin_mode != "multi":
-        return None
-    spot = det.spotlight_marker_id
-    return int(spot) if spot >= 0 and spot in app._controlled_ids else None
+        return []
+    out: list[Spotlight] = []
+    for number in range(1, SPOTLIGHT_COUNT + 1):
+        spot = int(getattr(det, spotlight_field(number)))
+        if spot < 0 or spot not in app._controlled_ids or any(s.marker_id == spot for s in out):
+            continue
+        out.append(Spotlight(number, spot, int(getattr(det, followed_field(number)))))
+    return out
+
+
+def spotlight_marker_id(app: Any) -> int | None:
+    """Spot 1's marker when it is configured and controlled, else None."""
+    first = next((s for s in spotlights(app) if s.number == 1), None)
+    return first.marker_id if first is not None else None
 
 
 def performer_marker_ids(app: Any) -> list[int]:
-    """The All Performers pool: every registered controlled marker but the spotlight."""
-    spot = spotlight_marker_id(app)
-    return sorted(mid for mid in app._controlled_ids if mid != spot and app._server.get_marker(mid) is not None)
+    """The All Performers pool: every registered controlled marker but the spotlights."""
+    spots = {s.marker_id for s in spotlights(app)}
+    return sorted(mid for mid in app._controlled_ids if mid not in spots and app._server.get_marker(mid) is not None)
 
 
 def is_tracking_performer(app: Any, marker_id: int) -> bool:
@@ -620,24 +641,44 @@ def is_tracking_performer(app: Any, marker_id: int) -> bool:
 
 
 def performer_snapshot(app: Any) -> dict[str, Any]:
-    """All Performers state for /api/stats: the spotlight and every performer marker."""
-    spot = spotlight_marker_id(app)
-    followed = app._config.detection.followed_marker_id if spot is not None else -1
+    """All Performers state for /api/stats: the spotlights and every performer marker.
+
+    ``spotlight_marker_id`` / ``followed_marker_id`` are spot 1's, kept beside
+    the full ``spotlights`` list for readers that predate spots 2 and 3.
+    """
+    spots = spotlights(app)
+    first = next((s for s in spots if s.number == 1), None)
+    followed_by: dict[int, list[int]] = {}
+    for spot in spots:
+        followed_by.setdefault(spot.followed_marker_id, []).append(spot.number)
     return {
-        "spotlight_marker_id": spot,
-        "followed_marker_id": followed if followed >= 0 else None,
+        "spotlight_marker_id": first.marker_id if first is not None else None,
+        "followed_marker_id": first.followed_marker_id if first is not None and first.followed_marker_id >= 0 else None,
+        "spotlights": [
+            {
+                "number": s.number,
+                "marker_id": s.marker_id,
+                "followed_marker_id": s.followed_marker_id if s.followed_marker_id >= 0 else None,
+            }
+            for s in spots
+        ],
         "performers": [
-            {"marker_id": mid, "tracking": is_tracking_performer(app, mid), "followed": mid == followed}
+            {
+                "marker_id": mid,
+                "tracking": is_tracking_performer(app, mid),
+                "followed": mid in followed_by,
+                "followed_by": followed_by.get(mid, []),
+            }
             for mid in performer_marker_ids(app)
         ],
     }
 
 
 def cycle_followed_performer(app: Any, direction: int) -> bool:
-    """Move the spotlight to the next (+1) or previous (-1) tracked performer.
+    """Move spot 1 to the next (+1) or previous (-1) tracked performer.
 
     Only performers holding a person are offered; with none tracked, every
-    performer marker is. Returns False when no spotlight is set up, so the
+    performer marker is. Returns False when spot 1 is not set up, so the
     caller falls back to ordinary marker selection.
     """
     if spotlight_marker_id(app) is None:
@@ -696,27 +737,27 @@ def swap_performers(app: Any, first: int, second: int) -> bool:
     return True
 
 
-def _drive_spotlight(app: Any, spot_id: int, pool: list[int], steps: float) -> None:
+def _drive_spotlight(app: Any, spot: Spotlight, pool: list[int], steps: float) -> None:
     """Mirror the followed performer's marker onto the spotlight marker.
 
     It glides onto a performer it was not on last frame (a switch, or the
     performer re-acquired), then tracks exactly. With no tracked performer to
     follow it holds where it is at status 0.0.
     """
-    spot = app._server.get_marker(spot_id)
-    state = _get_pin_state(app, spot_id)
-    followed = app._config.detection.followed_marker_id
+    marker = app._server.get_marker(spot.marker_id)
+    state = _get_pin_state(app, spot.marker_id)
+    followed = spot.followed_marker_id
     target_state = app._detection_pin_states.get(followed) if followed in pool else None
     if target_state is None or target_state.attached_marker_id != followed:
         state.spot_target_id = None
-        _write_status(spot, state, 0.0)
+        _write_status(marker, state, 0.0)
         return
     tx, ty, tz = app._server.get_marker(followed).pos
     if state.spot_target_id != followed:
         state.spot_target_id = followed
         state.spot_gliding = True
     if state.spot_gliding:
-        sx, sy, _ = spot.pos
+        sx, sy, _ = marker.pos
         ease = ema_factor(_SPOT_GLIDE, steps)
         sx += ease * (tx - sx)
         sy += ease * (ty - sy)
@@ -725,7 +766,7 @@ def _drive_spotlight(app: Any, spot_id: int, pool: list[int], steps: float) -> N
             sx, sy = tx, ty
         tx, ty = sx, sy
     status = 1.0 if target_state.status is None else target_state.status
-    spot.set_pos(tx, ty, tz, status=status)
+    marker.set_pos(tx, ty, tz, status=status)
     state.status = status
 
 
@@ -748,10 +789,8 @@ def _apply_multi_all(
     """
     cfg = app._config
     pool = performer_marker_ids(app)
-    spot_id = spotlight_marker_id(app)
-    if spot_id is not None and app._server.get_marker(spot_id) is None:
-        spot_id = None
-    _prune_pin_states(app, keep=set(pool) | ({spot_id} if spot_id is not None else set()))
+    spots = [s for s in spotlights(app) if app._server.get_marker(s.marker_id) is not None]
+    _prune_pin_states(app, keep=set(pool) | {s.marker_id for s in spots})
     steps = dt_steps(dt)
 
     w, h = app._video_receiver.resolution
@@ -761,8 +800,8 @@ def _apply_multi_all(
             state = _get_pin_state(app, mid)
             state.reset()
             _write_status(app._server.get_marker(mid), state, 0.0)
-        if spot_id is not None:
-            _drive_spotlight(app, spot_id, pool, steps)
+        for spot in spots:
+            _drive_spotlight(app, spot, pool, steps)
         return
 
     use_bottom = cfg.detection.pin_point == "bottom"
@@ -866,8 +905,8 @@ def _apply_multi_all(
         marker.set_pos(smooth_x, smooth_y, marker.pos[2], status=status)
         state.status = status
 
-    if spot_id is not None:
-        _drive_spotlight(app, spot_id, pool, steps)
+    for spot in spots:
+        _drive_spotlight(app, spot, pool, steps)
 
 
 def _prune_manual_markers(app: Any, *, keep: set[int]) -> None:
