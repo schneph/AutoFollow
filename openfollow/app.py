@@ -43,6 +43,9 @@ from openfollow.runtime.app_commands import (
     check_controller_slot_actions as runtime_check_controller_slot_actions,
 )
 from openfollow.runtime.app_commands import (
+    check_performer_swaps as runtime_check_performer_swaps,
+)
+from openfollow.runtime.app_commands import (
     check_restart_request as runtime_check_restart_request,
 )
 from openfollow.runtime.app_commands import (
@@ -573,6 +576,9 @@ class OpenFollowApp:
 
     def _check_controller_slot_actions(self) -> None:
         runtime_check_controller_slot_actions(self)
+
+    def _check_performer_swaps(self) -> None:
+        runtime_check_performer_swaps(self)
 
     def _check_camera_setup_requests(self) -> None:
         runtime_check_camera_setup_requests(self)

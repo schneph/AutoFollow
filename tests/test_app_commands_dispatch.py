@@ -314,6 +314,31 @@ def test_slot_actions_without_input_are_dropped() -> None:
 
 
 # ---------------------------------------------------------------------------
+# check_performer_swaps
+# ---------------------------------------------------------------------------
+
+
+def test_performer_swaps_run_once_in_order(monkeypatch) -> None:
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(app_commands, "swap_performers", lambda _app, a, b: calls.append((a, b)) or True)
+    app = _make_app()
+    app._web_commands.request_performer_swap(1, 2)
+    app._web_commands.request_performer_swap(3, 1)
+    app_commands.check_performer_swaps(app)
+    app_commands.check_performer_swaps(app)
+    assert calls == [(1, 2), (3, 1)]
+
+
+def test_a_refused_performer_swap_is_logged(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(app_commands, "swap_performers", lambda *_a: False)
+    app = _make_app()
+    app._web_commands.request_performer_swap(1, 9)
+    with caplog.at_level("INFO", logger=app_commands.__name__):
+        app_commands.check_performer_swaps(app)
+    assert "Markers 1 and 9 are not both performers; swap not applied." in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # check_camera_setup_requests
 # ---------------------------------------------------------------------------
 

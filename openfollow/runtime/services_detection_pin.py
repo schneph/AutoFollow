@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,8 @@ from openfollow.scene.solver import invert_overlay_distortion, unproject_to_plan
 
 if TYPE_CHECKING:
     from openfollow.psn.marker import Marker
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -666,6 +669,29 @@ def follow_performer(app: Any, marker_id: int) -> bool:
     if det.followed_marker_id == target:
         return False
     det.followed_marker_id = target
+    return True
+
+
+def swap_performers(app: Any, first: int, second: int) -> bool:
+    """Swap the people two All Performers markers follow, for a tracker that mixed them up.
+
+    Each marker takes over the other's person, smoothing and status, so it
+    jumps to that person on the next frame. The spotlight keeps its marker, so
+    it moves to whoever that marker now holds. Returns False outside All
+    Performers or when either id is not a performer marker (or they are the
+    same), changing nothing.
+    """
+    det = app._config.detection
+    pool = performer_marker_ids(app)
+    if not det.enabled or det.pin_mode != "multi" or first == second or first not in pool or second not in pool:
+        return False
+    states = app._detection_pin_states
+    a, b = _get_pin_state(app, first), _get_pin_state(app, second)
+    states[first], states[second] = b, a
+    for mid, state in ((first, b), (second, a)):
+        if state.attached_marker_id is not None:
+            state.attached_marker_id = mid
+    logger.info("Swapped the performers on markers %d and %d.", first, second)
     return True
 
 

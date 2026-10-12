@@ -11,6 +11,8 @@ import sys
 import threading
 from typing import TYPE_CHECKING
 
+from openfollow.runtime.services_detection_pin import swap_performers
+
 if TYPE_CHECKING:
     from openfollow.app import OpenFollowApp
 
@@ -55,6 +57,13 @@ def check_controller_slot_actions(app: OpenFollowApp) -> None:
         except Exception:
             # One failed action must not drop the others already taken off the queue.
             logger.exception("Controller slot action %s on C%d failed.", action, index + 1)
+
+
+def check_performer_swaps(app: OpenFollowApp) -> None:
+    """Run the performer swaps queued from the web All Performers panel."""
+    for first, second in app._web_commands.consume_performer_swaps():
+        if not swap_performers(app, first, second):
+            logger.info("Markers %d and %d are not both performers; swap not applied.", first, second)
 
 
 def check_camera_setup_requests(app: OpenFollowApp) -> None:

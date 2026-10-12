@@ -5328,6 +5328,23 @@ def setup_routes(app: Bottle, server: ConfigWebServer) -> None:
         server.request_freeze(frozen)
         return template("partials/output_freeze", frozen=frozen)
 
+    @app.post("/section/detection/swap/<first:int>")
+    def pick_performer_swap(first: int) -> Any:
+        """Mark one performer to swap; the panel then offers every other one."""
+        view = _performers_view(server, _request_scoped_config())
+        if any(p["marker_id"] == first for p in view["performers"]):
+            view["swap_from"] = first
+        return template("partials/performers_table", view=view)
+
+    @app.post("/section/detection/swap/<first:int>/<second:int>")
+    def swap_performers(first: int, second: int) -> Any:
+        """Have the main loop swap the people two performer markers follow."""
+        view = _performers_view(server, _request_scoped_config())
+        ids = {p["marker_id"] for p in view["performers"]}
+        if first != second and first in ids and second in ids:
+            server.request_performer_swap(first, second)
+        return template("partials/performers_table", view=view)
+
     @app.post("/section/controller_slots/<action:re:identify|forget>/<index:int>")
     def controller_slot_action(action: str, index: int) -> Any:
         """Queue Identify / Forget for one slot; the main loop, which owns the slots, runs it."""

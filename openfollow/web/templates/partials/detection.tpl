@@ -199,7 +199,7 @@
             </div>
             <div id="performers-content"
                  hx-get="/section/detection/performers"
-                 hx-trigger="load, every 1s [!this.closest('[data-multi-only]').hidden && !this.closest('.section').classList.contains('is-collapsed')]"
+                 hx-trigger="load, every 1s [!this.closest('[data-multi-only]').hidden && !this.closest('.section').classList.contains('is-collapsed') && !this.querySelector('[data-swap-from]')]"
                  hx-target="this"
                  hx-swap="innerHTML"></div>
         </div>

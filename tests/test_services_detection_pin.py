@@ -39,6 +39,7 @@ from openfollow.runtime.services_detection_pin import (
     is_assist_controlled,
     is_tracking_performer,
     performer_snapshot,
+    swap_performers,
 )
 
 pytestmark = pytest.mark.unit
@@ -2163,3 +2164,68 @@ def test_speed_response_speeds_up_the_assist_glide(monkeypatch) -> None:
             _run_assist(app, detector, monkeypatch)
         lags[beta] = (0.1 + 59 * 0.005) * 10.0 - out.pos[0]
     assert lags[3.0] < lags[0.0] * 0.7
+
+
+# ---------------------------------------------------------------------------
+# swap_performers
+# ---------------------------------------------------------------------------
+
+
+def test_swap_moves_each_person_onto_the_other_marker(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    by_track = {_track(app, mid): mid for mid in (1, 2)}
+
+    assert swap_performers(app, 1, 2) is True
+    assert _track(app, by_track[10]) == 20
+    assert _track(app, by_track[20]) == 10
+    # Overlay ownership follows the swap at once, before the next frame.
+    assert app._detection_pin_states[1].attached_marker_id == 1
+    assert app._detection_pin_states[2].attached_marker_id == 2
+
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    assert _x(app, by_track[10]) == pytest.approx(7.0)
+    assert _x(app, by_track[20]) == pytest.approx(2.0)
+
+
+def test_swap_with_an_empty_marker_moves_the_person(monkeypatch) -> None:
+    app = _multi_app()
+    _run_multi(app, [_det(0.4, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+    assert swap_performers(app, 3, 1) is True
+    _run_multi(app, [_det(0.4, 10)], monkeypatch)
+    assert _track(app, 1) is None
+    assert _track(app, 3) == 10
+    assert _x(app, 3) == pytest.approx(4.0)
+    assert app._server.get_marker(1).status == 0.0
+
+
+def test_swap_keeps_the_spotlight_on_its_marker(monkeypatch) -> None:
+    app = _multi_app(spotlight_marker_id=3, followed_marker_id=1)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    assert _track(app, 1) == 10
+
+    swap_performers(app, 1, 2)
+    for _ in range(80):
+        _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    # Marker 1 now holds person 20, so the spotlight settles on them.
+    assert _x(app, 1) == pytest.approx(7.0)
+    assert _x(app, 3) == pytest.approx(7.0)
+
+
+@pytest.mark.parametrize(("first", "second"), [(1, 1), (1, 9), (9, 1), (3, 1)])
+def test_swap_refuses_anything_but_two_performers(monkeypatch, first: int, second: int) -> None:
+    app = _multi_app(spotlight_marker_id=3)
+    _run_multi(app, [_det(0.2, 10), _det(0.7, 20)], monkeypatch)
+    before = {mid: _track(app, mid) for mid in (1, 2)}
+
+    assert swap_performers(app, first, second) is False
+    assert {mid: _track(app, mid) for mid in (1, 2)} == before
+
+
+@pytest.mark.parametrize("cfg", [{"pin_mode": "assist"}, {"enabled": False}])
+def test_swap_needs_all_performers_running(cfg: dict) -> None:
+    app = _multi_app(**cfg)
+    assert swap_performers(app, 1, 2) is False
+    assert app._detection_pin_states == {}
