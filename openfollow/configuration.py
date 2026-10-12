@@ -821,8 +821,12 @@ class TriggerZoneConfig:
     # selected → the zone emits nothing.
     destination_id: str = ""
     enabled: bool = True
+    # All Performers: a person who first appears inside this zone takes this
+    # marker when it is free; ``-1`` = not an entry zone.
+    performer_marker_id: int = -1
 
     def __post_init__(self) -> None:
+        self.performer_marker_id = _coerce_int(self.performer_marker_id, -1, lo=-1)
         if self.trigger_source not in VALID_TRIGGER_SOURCES:
             logger.warning(
                 "Invalid zone trigger_source %r, falling back to 'markers'",

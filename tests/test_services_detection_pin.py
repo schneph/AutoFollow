@@ -21,7 +21,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openfollow.configuration import CameraConfig, DetectionConfig, GridConfig
+from openfollow.configuration import (
+    CameraConfig,
+    DetectionConfig,
+    GridConfig,
+    TriggerZoneConfig,
+    TriggerZonesConfig,
+)
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT
 from openfollow.runtime.services_detection_pin import (
     DetectionPinState,
@@ -157,7 +163,9 @@ def _make_app(
         marker = marker or _StubMarker()
         server = _StubServer(marker)
     return SimpleNamespace(
-        _config=SimpleNamespace(detection=detection_cfg, grid=grid, camera=CameraConfig()),
+        _config=SimpleNamespace(
+            detection=detection_cfg, grid=grid, camera=CameraConfig(), trigger_zones=TriggerZonesConfig()
+        ),
         _video_receiver=_StubVideoReceiver(resolution),
         _camera=_StubCamera(),
         _server=server,
@@ -2229,3 +2237,88 @@ def test_swap_needs_all_performers_running(cfg: dict) -> None:
     app = _multi_app(**cfg)
     assert swap_performers(app, 1, 2) is False
     assert app._detection_pin_states == {}
+
+
+# ---------------------------------------------------------------------------
+# Entry zones (All Performers)
+# ---------------------------------------------------------------------------
+
+# Feet of ``_det(x, ...)`` with the default y1=0 sit at world y = 1.0.
+_WINGS = {
+    "left": [[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 2.0]],
+    "right": [[7.0, 0.0], [10.0, 0.0], [10.0, 2.0], [7.0, 2.0]],
+}
+
+
+def _entry_zone(side: str, marker_id: int, **kw) -> TriggerZoneConfig:  # noqa: ANN003
+    return TriggerZoneConfig(vertices=_WINGS[side], performer_marker_id=marker_id, **kw)
+
+
+def test_a_newcomer_in_an_entry_zone_takes_its_marker(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [_entry_zone("right", 3), _entry_zone("left", 2)]
+    _run_multi(app, [_det(0.85, 10), _det(0.5, 20, y1=0.4)], monkeypatch)
+
+    assert _track(app, 3) == 10
+    # Outside every entry zone: the lowest free marker, as before.
+    assert _track(app, 1) == 20
+    assert _track(app, 2) is None
+
+
+def test_an_entry_zone_whose_marker_is_taken_falls_back_to_the_lowest_free(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [_entry_zone("right", 1)]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    _run_multi(app, [_det(0.85, 10), _det(0.9, 20)], monkeypatch)
+
+    assert _track(app, 1) == 10
+    assert _track(app, 2) == 20
+
+
+def test_an_entry_zone_outranks_reacquire(monkeypatch) -> None:
+    app = _multi_app(reacquire_radius_m=5.0)
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+    _run_multi(app, [_det(0.75, 10, y1=0.4)], monkeypatch)
+    assert _track(app, 1) == 10
+    _run_multi(app, [], monkeypatch)  # marker 1 lost near x=7.5
+    _run_multi(app, [_det(0.85, 11)], monkeypatch)
+
+    assert _track(app, 3) == 11
+    assert _track(app, 1) is None
+
+
+@pytest.mark.parametrize(
+    "zone",
+    [
+        _entry_zone("right", 3, enabled=False),
+        _entry_zone("right", 9),
+        _entry_zone("right", -1),
+        TriggerZoneConfig(vertices=[[7.0, 0.0], [10.0, 0.0]], performer_marker_id=3),
+    ],
+)
+def test_zones_that_cannot_assign_are_ignored(monkeypatch, zone: TriggerZoneConfig) -> None:
+    app = _multi_app()
+    app._config.trigger_zones.zones = [zone]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+
+def test_an_entry_zone_on_the_spotlight_marker_is_ignored(monkeypatch) -> None:
+    app = _multi_app(spotlight_marker_id=3)
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+    _run_multi(app, [_det(0.85, 10)], monkeypatch)
+    assert _track(app, 1) == 10
+
+
+def test_feet_off_the_floor_plane_skip_the_entry_zones(monkeypatch) -> None:
+    app = _multi_app()
+    app._config.grid.z_offset = 0.5
+    app._config.trigger_zones.zones = [_entry_zone("right", 3)]
+
+    def _unproject(params, screen_pt, w, h, plane_z):  # noqa: ANN001, ANN202
+        if plane_z == 0.5:
+            return np.full((1, 3), np.nan)
+        return _linear_unproject(params, screen_pt, w, h, plane_z)
+
+    _run(app, _MultiDetector([_det(0.85, 10)]), monkeypatch, unproject=_unproject)
+    assert _track(app, 1) == 10

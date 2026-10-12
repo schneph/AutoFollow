@@ -15,6 +15,7 @@ import numpy.typing as npt
 from openfollow.runtime.frame_timing import NOMINAL_FRAME_DT, dt_steps, ema_factor
 from openfollow.runtime.state_maps import get_or_create, prune_to_keep
 from openfollow.scene.solver import invert_overlay_distortion, unproject_to_plane
+from openfollow.zones.geometry import point_in_polygon
 
 if TYPE_CHECKING:
     from openfollow.psn.marker import Marker
@@ -740,8 +741,9 @@ def _apply_multi_all(
 
     A marker keeps its person for as long as the detector hands out that track
     (it coasts through brief occlusions). A confident new track takes the free
-    marker that lost its person nearest to it within ``reacquire_radius_m``,
-    else the lowest free id; with no free marker it waits. A marker whose track
+    marker of the entry zone it appears in, else the free marker that lost its
+    person nearest to it within ``reacquire_radius_m``, else the lowest free
+    id; with no free marker it waits. A marker whose track
     ends holds its position at status 0.0 and is free again.
     """
     cfg = app._config
@@ -785,6 +787,28 @@ def _apply_multi_all(
     def _plane_z(marker: Any) -> float:
         return float(cfg.grid.z_offset) if use_bottom else float(marker.pos[2])
 
+    entry_zones = [
+        (z.performer_marker_id, z.vertices)
+        for z in cfg.trigger_zones.zones
+        if z.enabled and z.performer_marker_id in pool and len(z.vertices) >= 3
+    ]
+
+    def _entry_marker(track_id: int, free: list[int]) -> int | None:
+        """The free marker of the first entry zone the person's feet stand in."""
+        if not entry_zones:
+            return None
+        box = boxes[track_id]
+        screen_pt[0, 0] = (box.x1 + box.x2) / 2.0 * w
+        screen_pt[0, 1] = box.y2 * h
+        undistorted = invert_overlay_distortion(screen_pt, float(w), float(h), cfg.camera.lens_k1, cfg.camera.lens_k2)
+        feet = unproject_to_plane(params, undistorted, float(w), float(h), float(cfg.grid.z_offset))[0]
+        if not np.all(np.isfinite(feet)):
+            return None
+        for marker_id, vertices in entry_zones:
+            if marker_id in free and point_in_polygon(float(feet[0]), float(feet[1]), vertices):
+                return int(marker_id)
+        return None
+
     states = {mid: _get_pin_state(app, mid) for mid in pool}
     for state in states.values():
         if state.locked_track_id is not None and state.locked_track_id not in boxes:
@@ -802,9 +826,9 @@ def _apply_multi_all(
         free = [mid for mid in pool if states[mid].locked_track_id is None]
         if not free:
             break
-        chosen: int | None = None
+        chosen = _entry_marker(box.track_id, free)
         best_dsq = reacquire_sq
-        for mid in free:
+        for mid in free if chosen is None else ():
             if not states[mid].lost:
                 continue
             marker = app._server.get_marker(mid)

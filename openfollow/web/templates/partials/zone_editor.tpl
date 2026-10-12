@@ -1,5 +1,7 @@
 % from openfollow.web.routes import osc_destinations_script_json
 % _osc_dests_json = osc_destinations_script_json(config)
+% import json as _json
+% _performer_markers_json = _json.dumps([int(m) for m in config.controlled_marker_ids])
 <div id="zone-editor-section" class="section" data-fold-key="zone_editor" data-help="zone_editor" data-template-form="1">
     <div class="section-head">
         <h2>Zone Editor</h2>
@@ -40,6 +42,8 @@
     // /api/zones poll so add/rename/delete in the OSC Destinations section
     // reaches the dropdown without a full page reload.
     var OSC_DESTINATIONS = {{!_osc_dests_json}};
+    // Controlled markers an All Performers entry zone can hand to a newcomer.
+    var PERFORMER_MARKERS = {{!_performer_markers_json}};
 
     // Zone color palette seeded by base.tpl via window.OPENFOLLOW_PALETTE
     // (from openfollow.palette). pickZoneColor delegates to shared
@@ -531,6 +535,19 @@
               + ' aria-describedby="zone-triggered-by-error">';
         html += '        <span class="field-error" id="zone-triggered-by-error" data-zone-field-error="triggered_by" aria-live="polite"></span>';
         html += '      </div>';
+        html += '    </div>';
+        html += '    <div class="row">';
+        html += '      <div class="field"><label>Entry Marker</label><select data-zone-field="performer_marker_id">';
+        var entryId = (typeof z.performer_marker_id === 'number') ? z.performer_marker_id : -1;
+        html += '        <option value="-1"' + (entryId < 0 ? ' selected' : '') + '>(none)</option>';
+        if (entryId >= 0 && PERFORMER_MARKERS.indexOf(entryId) < 0) {
+            html += '        <option value="' + entryId + '" selected disabled>Marker ' + entryId + ' (unavailable)</option>';
+        }
+        for (var pi = 0; pi < PERFORMER_MARKERS.length; pi++) {
+            var pm = PERFORMER_MARKERS[pi];
+            html += '        <option value="' + pm + '"' + (pm === entryId ? ' selected' : '') + '>Marker ' + pm + '</option>';
+        }
+        html += '      </select></div>';
         html += '    </div>';
         html += '  </div>';
 

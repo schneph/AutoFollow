@@ -2266,6 +2266,7 @@ _ZONE_FIELD_PARSERS: dict[str, _FieldParser] = {
     "osc_address_final_exit": _as_str,
     "destination_id": _as_str,
     "enabled": _as_bool,
+    "performer_marker_id": _as_int,
 }
 
 

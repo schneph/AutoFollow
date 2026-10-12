@@ -5875,6 +5875,29 @@ def test_api_update_zone_replaces_fields_for_existing_index(live_server) -> None
     assert saved.trigger_zones.zones[idx].name == "Renamed"
 
 
+@pytest.mark.parametrize(("raw", "expected"), [("3", 3), (2, 2), ("-1", -1), ("wing", 5), (-9, -1)])
+def test_api_update_zone_saves_the_entry_marker(live_server, raw: object, expected: int) -> None:
+    server, base = live_server
+    _, created = _post_json(base, "/api/zones", {"name": "Wing", "performer_marker_id": 5})
+    idx = created["index"]
+
+    status, _ = _put_json(base, f"/api/zones/{idx}", {"performer_marker_id": raw})
+
+    assert status == 200
+    assert load_config(server.config_path).trigger_zones.zones[idx].performer_marker_id == expected
+
+
+def test_zone_editor_offers_the_controlled_markers_as_entry_markers(live_server) -> None:
+    server, base = live_server
+    cfg = load_config(server.config_path)
+    cfg.controlled_marker_ids = [2, 4]
+    cfg.viewer_marker_ids = [2, 4]
+    save_config(cfg, server.config_path)
+    _, body = _get(base, "/")
+    assert "var PERFORMER_MARKERS = [2, 4];" in body
+    assert 'data-zone-field="performer_marker_id"' in body
+
+
 def test_api_update_zone_returns_404_for_out_of_range_index(live_server) -> None:
     _, base = live_server
     status, body = _put_json(base, "/api/zones/9999", {"name": "Phantom"})
