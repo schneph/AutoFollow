@@ -6,6 +6,9 @@ AutoFollow watches a stage through an ordinary webcam or video feed, finds every
 calibrated stage space, and sends their positions out live. Moving lights follow people without a
 follow-spot operator, and projection content can be mapped onto performers in real time.
 
+AutoFollow runs on Mac (Apple Silicon) and Windows 10 / 11. The current release is
+[v0.5.0](https://github.com/schneph/AutoFollow/releases/tag/v0.5.0).
+
 > [!WARNING]
 > AutoFollow coordinates the lighting, video and audio of a production. It is not a safety system
 > and must not be used for safety-critical applications.
@@ -29,23 +32,43 @@ Everything runs offline on the show network. Nothing is sent to the internet.
 
 | Mode | What it does |
 | --- | --- |
-| **All Performers** | Gives every person on stage a marker of their own, automatically. When someone leaves and comes back near where they left, they get their old marker back, so their fixtures pick them up again. |
+| **All Performers** | Gives every person on stage a marker of their own, automatically. When someone leaves and comes back near where they left, they get their old marker back, so their fixtures pick them up again. Up to three spotlights can each follow one chosen performer. |
 | **Fully Automatic** | Follows one performer with one marker. |
 | **AI Assisted** | An operator steers markers by hand and the detector pulls each one onto the nearest person. |
 | **Off** | Markers are driven only by hand (gamepad, mouse, keyboard) or by OSC. |
+
+### Show tools
+
+| Feature | What it does |
+| --- | --- |
+| **Spotlights** | In All Performers mode, up to three spotlight markers each follow a performer you pick, on the web page, from the Operator Screen or from your desk over OSC (`/follow`). |
+| **Swap** | When the tracker mixes two performers up after they cross, swap them so each marker goes back to the right person. |
+| **Entry zones** | A performer gets the marker of the zone they walk on from, so each entrance can carry its own patch. |
+| **Freeze** | Holds every output exactly where it is (for a camera move or a crossing), then releases it. From the web page, a key, a gamepad button or the `/freeze` OSC cues. |
+| **Speed response** | Smoothing that loosens while a performer moves fast and stays steady when they stand still. |
+| **Calibration check** | Shows, over live video, how far the floor marks land from where the calibration says they are. |
+| **Rehearsal performers** | Up to six simulated people walk the stage, so you can test the desk, zones and outputs with nobody on it. |
+| **Trigger zones** | Areas on stage that send OSC cues when people enter and leave, with a preset for ChamSys MagicQ playbacks. |
+| **Projection output** | Sends where a marker sits in a projected image as `[u]` / `[v]` in OSC, for media servers such as Resolume. |
 
 ### Works with
 
 | Target | How AutoFollow talks to it |
 | --- | --- |
 | grandMA3 | PSN (PosiStageNet), native tracking input |
-| grandMA2 | Planned (MA2 has no tracking input, so this needs a Telnet bridge) |
+| grandMA2 | Moving lights over Telnet (AutoFollow types the pan / tilt commands), or sACN / Art-Net |
 | ETC Eos / Ion | OSC (`/eos/chan/<n>/xyz` in metres) |
 | Hog 4 / Hog 5 | OSC |
+| ChamSys MagicQ | OSC trigger-zone cues for a playback |
 | Avolites | Planned (Titan has no direct position input) |
 | Disguise | PSN |
-| Resolume | OSC (normalised parameters) |
+| Resolume | OSC (normalised parameters, or `[u]` / `[v]` projection coordinates) |
+| Moving lights directly | Pan / tilt over sACN (E1.31) or Art-Net, with a calibrate tool to find where each light hangs |
 | Anything else | PSN, OTP, OSC and RTTrPM are all available |
+
+> [!NOTE]
+> The moving lights output (sACN, Art-Net and grandMA2 Telnet) has not been tested on real
+> fixtures or a real console yet. Try it with your rig before a show depends on it.
 
 ### Video inputs
 
@@ -62,14 +85,26 @@ NDI® is a registered trademark of Vizrt NDI AB and needs the separately install
 
 ## Getting started
 
+Download the installer for your computer from the
+[latest release](https://github.com/schneph/AutoFollow/releases/latest):
+
+| Your computer | File |
+| --- | --- |
+| Mac with Apple Silicon (M1 or later) | `AutoFollow-<version>-arm64.dmg` |
+| Windows 10 or 11 (64-bit) | `AutoFollow-<version>-Setup.exe` |
+
 ### macOS
 
-Download the AutoFollow `.dmg`, open it, and drag AutoFollow into Applications. On first launch
-macOS asks for camera access. The web control page opens at `http://localhost:8080`.
+Open the `.dmg` and drag AutoFollow into Applications. The app is not notarized yet, so the first
+time, right-click AutoFollow and choose **Open** (or run
+`xattr -dr com.apple.quarantine /Applications/AutoFollow.app`). On first launch macOS asks for
+camera access. The web control page opens at `http://localhost:8080`.
 
 ### Windows
 
-A Windows version has been released and is awaiting full testing.
+Run the setup file. It is not code-signed yet, so SmartScreen warns on first run: click
+**More info**, then **Run anyway**. The web control page opens in your browser at
+`http://localhost:8080`.
 
 ### From source
 
@@ -83,7 +118,10 @@ internally, so commands such as `poetry run openfollow` stay the same.
 3. **Camera & Grid → Setup Wizard:** enter the stage size and pin the four corners.
 4. **Markers:** add one controlled marker per performer you want to track.
 5. **Detection:** set Tracking to **All Performers**.
-6. **Outputs:** switch on PSN and/or OSC and point them at your desk or media server.
+6. **Outputs:** switch on PSN and/or OSC and point them at your desk or media server, or set up
+   **Moving Lights** to drive fixtures directly.
+7. **Check it:** run the **Calibration Check**, and turn on **Rehearsal performers** to test your
+   outputs before anyone is on stage.
 
 ---
 
@@ -104,7 +142,8 @@ Hermann, Michel Honold and Vinzenz Schultz (<https://openfollow.app>). OpenFollo
 video pipeline, camera calibration, person detection and the PSN / OTP / OSC / RTTrPM outputs that
 AutoFollow builds on. Many thanks to the OpenFollow team for releasing their work as free software.
 
-AutoFollow adds the All Performers tracking mode and is adding Windows support.
+AutoFollow adds the All Performers tracking mode and its show tools (spotlights, swap, entry
+zones, freeze, rehearsal performers), the moving lights output, and Windows support.
 It is an independent project and is not endorsed by or affiliated with the OpenFollow project.
 The OpenFollow name, logo and branding belong to their owners and are not part of AutoFollow.
 
