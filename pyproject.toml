@@ -25,9 +25,9 @@ dependencies = [
     "multicast-expert>=1.4",
     # Floor is what Debian Trixie's python3-gi ships: a packaged install runs the
     # OS bindings, not the pip build (packaging/build-deb.sh drops the pip copy).
-    "PyGObject>=3.50",
+    "PyGObject>=3.58.1",
     "psutil>=5.9",
-    "python-osc>=1.10.2",
+    "python-osc>=1.10.3",
     # USB MIDI support. mido is pure Python; python-rtmidi is C++ extension
     # with prebuilt wheels for Pi (aarch64 / manylinux). On platforms without
     # wheels pip builds from sdist (needs C++ toolchain + ALSA/CoreMIDI/WinMM
@@ -39,16 +39,16 @@ dependencies = [
     # no on-device compile. openfollow/input/mouse3d.py imports it lazily and
     # fail-softs when the lib is absent, so this stays import-safe everywhere.
     "pyspacemouse>=2.1.0",
-    "packaging>=26.3",
+    "packaging>=26.4",
     # Render the bundled help ``.md`` docs to HTML for the web UI help drawer.
     # Pure-Python, no native deps (safe on the Pi). ``escape=True`` (see
     # ``openfollow/web/_md.py``) keeps the rendered fragment inert, so no HTML
     # sanitiser dependency is needed.
-    "mistune>=3.3.4",
+    "mistune>=3.4.0",
 ]
 
 [project.optional-dependencies]
-detection = ["onnxruntime>=1.17", "opencv-python>=5.0.0.93"]
+detection = ["onnxruntime>=1.17", "opencv-python>=5.1.0.95"]
 # Model export tooling: converts YOLO ``.pt`` weights to the ONNX models the
 # detector runs. Pulls torch, so it's a workstation-only extra, never required
 # at show time. Used by ``scripts/export_onnx.py`` and the web model-export
@@ -90,13 +90,13 @@ include = [
 # This is the only ruff version in the repo: the pre-commit hook runs it out of
 # the poetry env rather than fetching its own at a ``rev``, so a second pin
 # cannot drift from this one.
-ruff = "0.16.9"
-pytest = "^9.1.1"
+ruff = "0.17.6"
+pytest = "^9.2.0"
 pytest-cov = "^7.1"
 coverage = { extras = ["toml"], version = "^7.16" }
 pre-commit = "^4.6.2"
 mutmut = "^3.8"
-mypy = "^2.3"
+mypy = "^2.4"
 
 # Static type checking: mypy --strict for all openfollow.* modules.
 # Third-party stubs without type info use ignore_missing_imports.
@@ -120,7 +120,7 @@ optional = true
 
 [tool.poetry.group.package-macos.dependencies]
 pyinstaller = ">=6.22.3"
-pyinstaller-hooks-contrib = ">=2026.8"
+pyinstaller-hooks-contrib = ">=2026.10"
 
 # Linting: ruff check/format (faster pyflakes/pycodestyle/isort/pyupgrade bundle).
 # line-length=120 matches old flake8 setting. target-version=py310 matches requires-python.
